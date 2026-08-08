@@ -128,6 +128,7 @@
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Devices/bar30"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Devices/oled"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Drivers"/>
+						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Middlewares/FreeRTOS/Source"/>
 						<entry excluding="sd_card" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Protocol"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Protocol/sd_card"/>
 					</sourceEntries>
@@ -208,6 +209,7 @@
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Devices/bar30"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Devices/oled"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Drivers"/>
+						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Middlewares/FreeRTOS/Source"/>
 						<entry excluding="sd_card" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Protocol"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Protocol/sd_card"/>
 					</sourceEntries>

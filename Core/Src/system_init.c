@@ -61,17 +61,6 @@ void system_clock_init(void){
 
 }
 
-void systick_init(void)
-{
-    SysTick->LOAD = 180000 - 1;
-
-    SysTick->VAL = 0;
-
-
-    SysTick->CTRL = SysTick_CTRL_CLKSOURCE_Msk;
-    SysTick->CTRL = SysTick_CTRL_TICKINT_Msk;
-	SysTick->CTRL = SysTick_CTRL_ENABLE_Msk;
-}
 
 void delay_ms(uint32_t ms)
 {

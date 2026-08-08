@@ -1,4 +1,6 @@
 #include <stdio.h>
+#include "FreeRTOS.h"
+#include "task.h"
 #include <string.h>
 #include "system_init.h"
 #include "gpio.h"
@@ -21,16 +23,57 @@
 #include "timer_timebase.h"
 #include "iwdg.h"
 
-static CommandPayload cmd;
+static void dummy_task(void *argument)
+{
+    (void)argument;
 
+    while (1)
+    {
+        GPIOA->ODR ^= (1U << 5);
+
+        vTaskDelay(pdMS_TO_TICKS(500));
+    }
+}
+
+void vApplicationStackOverflowHook(
+    TaskHandle_t xTask,
+    char *pcTaskName
+)
+{
+    (void)xTask;
+    (void)pcTaskName;
+
+    __disable_irq();
+
+    while (1)
+    {
+        GPIOA->ODR ^= (1U << 5);
+
+        for (volatile uint32_t i = 0; i < 500000; i++)
+        {
+        }
+    }
+}
+
+
+void vApplicationMallocFailedHook(void)
+{
+    __disable_irq();
+
+    while (1)
+    {
+        GPIOA->ODR ^= (1U << 5);
+
+        for (volatile uint32_t i = 0; i < 500000; i++)
+        {
+        }
+    }
+}
 
 int main(void)
 {
     // 1. Configure system clocks (180 MHz PLL)
     system_clock_init();
-
-    // 2. Start 1 ms system tick
-    systick_init();
 
     // 3. Initialize GPIO
     gpio_init(GPIOA, 5);
@@ -92,122 +135,26 @@ int main(void)
     tim7_init();
 
     // 18. Arm watchdog LAST
-    iwdg_init();
+   // iwdg_init();
+
+    SCB->AIRCR =
+        (0x5FAUL << SCB_AIRCR_VECTKEY_Pos) |
+        (3UL << SCB_AIRCR_PRIGROUP_Pos);
+
+    xTaskCreate(
+        dummy_task,
+        "Dummy",
+        128,
+        NULL,
+        1,
+        NULL
+    );
+
+    vTaskStartScheduler();
 
     while (1)
     {
-        // 1. Read shared variable safely with IRQ guard
-        __disable_irq();
-
-        // read link_ok or any other shared state here
-        bool local_link = link_ok;
-
-        __enable_irq();
-
-        // 2. Print status over UART every 500ms using g_tick
-        //    (non-blocking — compare g_tick, don't use delay_ms)
-        static uint32_t last_print = 0;
-
-        if (packet_parse_cmd(&cmd))
-        {
-            float pose[6] =
-            {
-                cmd.current_x,
-                cmd.current_y,
-                cmd.current_z,
-                cmd.current_roll,
-                cmd.current_pitch,
-                cmd.current_yaw
-            };
-
-            float target[6] =
-            {
-                cmd.target_x,
-                cmd.target_y,
-                cmd.target_z,
-                cmd.target_roll,
-                cmd.target_pitch,
-                cmd.target_yaw
-            };
-
-            cmd_update(
-                pose,
-                target,
-                cmd.armed
-            );
-        }
-
-        if (g_tick - last_print >= 500)
-        {
-            last_print = g_tick;
-            printf("tick=%lu link=%d\r\n", g_tick, local_link);
-        }
-
-        // Send telemetry at 50 Hz
-
-        uint8_t telem_pending_local;
-
-        __disable_irq();
-        telem_pending_local = telem_pending;
-        telem_pending = 0;
-        __enable_irq();
-
-        if (telem_pending_local)
-        {
-            TelemetryPayload tp;
-            uint8_t tx_buf[PACKET_SIZE];
-
-            memset(&tp, 0, sizeof(tp));
-
-            tp.depth_m     = cmd.current_z;
-            tp.raw_depth_m = cmd.current_z;
-
-            control_loop_get_pwm(tp.esc_pwm, 8);
-
-            tp.armed   = control_loop_get_armed();
-            tp.link_ok = control_loop_get_link();
-
-            tp.sat_flags = 0;
-
-            packet_build_telemetry(&tp, tx_buf);
-
-            uart1_write_buf(tx_buf, PACKET_SIZE);
-        }
-
-        // 3. Check log_pending flag and write log record
-
-        uint8_t pending;
-
-        __disable_irq();
-        pending = log_pending;
-        log_pending = 0;
-        __enable_irq();
-
-        if (pending)
-        {
-            LogRecord rec;
-
-            rec.depth_m = cmd.current_z;
-
-            rec.roll_deg  = cmd.current_roll;
-            rec.pitch_deg = cmd.current_pitch;
-            rec.yaw_deg   = cmd.current_yaw;
-
-            control_loop_get_pwm(rec.pwm, 8);
-
-            rec.armed = control_loop_get_armed();
-
-            rec.link_ok = control_loop_get_link();
-
-            rec.crc16 = crc_compute(
-                (uint8_t *)&rec,
-                sizeof(LogRecord) - sizeof(rec.crc16)
-            );
-
-            sd_logger_write(&rec);
-        }
-
-        // Feed watchdog
-        iwdg_kick();
+        /* Should never reach here */
     }
 }
+

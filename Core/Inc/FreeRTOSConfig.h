@@ -23,7 +23,6 @@ extern uint32_t SystemCoreClock;
 #define configTOTAL_HEAP_SIZE                  ((size_t)(22 * 1024))
 
 #define configMAX_TASK_NAME_LEN                16
-#define configUSE_16_BIT_TICKS                 0
 #define configIDLE_SHOULD_YIELD               1
 #define configUSE_TIME_SLICING                 1
 
