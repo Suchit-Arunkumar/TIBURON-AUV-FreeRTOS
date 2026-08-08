@@ -1,0 +1,2 @@
+../Protocol/sd_card/sd_logger.c:8:6:sd_logger_init	4	static
+../Protocol/sd_card/sd_logger.c:14:11:sd_logger_write	536	static

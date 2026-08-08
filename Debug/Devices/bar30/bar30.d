@@ -6,9 +6,7 @@ Devices/bar30/bar30.o: ../Devices/bar30/bar30.c ../Devices/bar30/bar30.h \
  ../Drivers/CMSIS/Include/cmsis_gcc.h \
  ../Drivers/CMSIS/Include/mpu_armv7.h \
  ../Drivers/CMSIS/Device/ST/STM32F4xx/Include/system_stm32f4xx.h \
- ../Drivers/i2c/i2c.h ../Core/Inc/system_init.h \
- ../Drivers/CMSIS/Device/ST/STM32F4xx/Include/stm32f4xx.h \
- ../Drivers/CMSIS/Device/ST/STM32F4xx/Include/stm32f446xx.h
+ ../Drivers/i2c/i2c.h
 ../Devices/bar30/bar30.h:
 ../Drivers/CMSIS/Device/ST/STM32F4xx/Include/stm32f446xx.h:
 ../Drivers/CMSIS/Include/core_cm4.h:
@@ -18,6 +16,3 @@ Devices/bar30/bar30.o: ../Devices/bar30/bar30.c ../Devices/bar30/bar30.h \
 ../Drivers/CMSIS/Include/mpu_armv7.h:
 ../Drivers/CMSIS/Device/ST/STM32F4xx/Include/system_stm32f4xx.h:
 ../Drivers/i2c/i2c.h:
-../Core/Inc/system_init.h:
-../Drivers/CMSIS/Device/ST/STM32F4xx/Include/stm32f4xx.h:
-../Drivers/CMSIS/Device/ST/STM32F4xx/Include/stm32f446xx.h:

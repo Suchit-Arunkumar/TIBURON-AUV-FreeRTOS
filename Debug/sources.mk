@@ -26,7 +26,6 @@ Core/Src \
 Core/Startup \
 Devices/bar30 \
 Devices/oled \
-Devices/sd_card \
 Drivers/adc \
 Drivers/crc_hw \
 Drivers/dac \
@@ -36,5 +35,9 @@ Drivers/iwdg \
 Drivers/spi \
 Drivers/timer \
 Drivers/uart \
+Middlewares/FreeRTOS/Source \
+Middlewares/FreeRTOS/Source/portable/GCC/ARM_CM4F \
+Middlewares/FreeRTOS/Source/portable/MemMang \
 Protocol \
+Protocol/sd_card \
 

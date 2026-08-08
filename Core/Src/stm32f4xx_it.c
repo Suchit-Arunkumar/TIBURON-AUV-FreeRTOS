@@ -27,6 +27,8 @@
 #include "control_loop.h"
 #include "timer_basic.h"
 #include "sd_logger.h"
+#include "FreeRTOS.h"
+#include "task.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 /* USER CODE END Includes */
@@ -183,17 +185,23 @@ void DebugMon_Handler(void)
 
 void TIM7_IRQHandler(void)
 {
-    // 1. Clear UIF flag
-	TIM7->SR &= ~TIM_SR_UIF;
+    // Clear TIM7 update interrupt flag
+    TIM7->SR &= ~TIM_SR_UIF;
 
-    // 2. Set log_pending flag
-	log_pending = 1;
+    // Set log_pending flag
+    log_pending = 1;
 
-    // 3. Toggle PA5
-	//GPIOA->ODR ^= (1 << 5);
+    // Tell FreeRTOS whether a higher-priority task was woken
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
-    // 4. Call control_loop_tick()
-	control_loop_tick();
+    // Wake the Control Task
+    vTaskNotifyGiveFromISR(
+        controlTaskHandle,
+        &xHigherPriorityTaskWoken
+    );
+
+    // Switch to the woken task if appropriate
+    portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
 }
 
 
