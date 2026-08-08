@@ -1,6 +1,5 @@
 #include "bar30.h"
 #include "i2c.h"
-#include "system_init.h"   // for delay_ms
 
 #define BAR30_ADDR     0x76
 #define BAR30_RESET    0x1E
@@ -10,6 +9,12 @@
 #define BAR30_ADC_READ 0x00
 
 static uint16_t prom[8];
+
+static void delay_ms_simple(uint32_t ms)
+{
+    for (uint32_t i = 0; i < ms * 8000; i++)
+        __NOP();
+}
 
 void bar30_init(void)
 {
@@ -21,8 +26,7 @@ void bar30_init(void)
     i2c_write(BAR30_ADDR , &cmd, 1);
 
     // 2. delay_ms(10)
-    delay_ms(10);
-
+    delay_ms_simple(10);
     // 3. loop i from 0 to 7:
     //    a. cmd = BAR30_PROM + (i * 2)
     //    b. i2c_write(BAR30_ADDR, &cmd, 1)
@@ -52,7 +56,7 @@ float bar30_read(void)
     i2c_write(BAR30_ADDR, &cmd, 1);
 
     // 2. delay_ms(10)
-    delay_ms(10);
+    delay_ms_simple(10);
 
     // 3. cmd = BAR30_ADC_READ, i2c_write(BAR30_ADDR, &cmd, 1)
     cmd = BAR30_ADC_READ;
@@ -69,8 +73,7 @@ float bar30_read(void)
     i2c_write(BAR30_ADDR, &cmd, 1);
 
     // 7. delay_ms(10)
-    delay_ms(10);
-
+    delay_ms_simple(10);
     // 8. cmd = BAR30_ADC_READ, i2c_write(BAR30_ADDR, &cmd, 1)
     cmd = BAR30_ADC_READ;
     i2c_write(BAR30_ADDR, &cmd, 1);
