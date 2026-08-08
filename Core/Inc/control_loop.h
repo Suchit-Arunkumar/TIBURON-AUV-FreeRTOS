@@ -6,6 +6,8 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "timer_pwm.h"
+#include "FreeRTOS.h"
+#include "task.h"
 
 #define N_DOF           6
 #define N_THR           8
@@ -40,5 +42,8 @@ void computePID(float dt);
 void computeAllocation(void);
 
 void applyPWM(void);
+
+extern TaskHandle_t controlTaskHandle;
+void control_task(void *argument);
 
 #endif /* __CONTROL_LOOP_H */

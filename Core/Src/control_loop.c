@@ -15,6 +15,8 @@
 #include <string.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include "FreeRTOS.h"
+#include "task.h"
 
 // =============================================================================
 // SECTION 1 — CONSTANTS
@@ -33,6 +35,10 @@
 
 volatile uint8_t telem_pending = 0;
 volatile uint8_t log_pending = 0;
+
+
+// FreeRTOS handle used by TIM7 ISR to notify the control task
+TaskHandle_t controlTaskHandle = NULL;
 
 // =============================================================================
 // SECTION 2 — ALLOCATION MATRICES
@@ -85,7 +91,7 @@ static float T_out[N_THR]    = {0};
 
 static int      g_pwm_current[N_THR];
 static bool     g_armed     = false;
-static uint32_t last_cmd_ms = 0;
+static TickType_t last_cmd_tick = 0;
 
 bool link_ok = false;
 
@@ -125,7 +131,7 @@ void control_loop_init(void)
     memset(T_out,    0, sizeof(T_out));
     g_armed     = false;
     link_ok     = false;
-    last_cmd_ms = 0;
+    last_cmd_tick = 0;
 }
 
 void control_loop_tick(void)
@@ -150,7 +156,7 @@ void cmd_update(const float new_pose[N_DOF],
     memcpy(target, new_target, N_DOF * sizeof(float));
     g_armed     = arm_flag;
     link_ok     = true;
-    last_cmd_ms = g_tick;
+    last_cmd_tick = xTaskGetTickCount();
 }
 
 // =============================================================================
@@ -266,7 +272,7 @@ void enterFailsafe(void)
 // =============================================================================
 void checkCommandTimeout(void)
 {
-    if (last_cmd_ms != 0 && (g_tick - last_cmd_ms) > CMD_TIMEOUT_MS) {
+    if (last_cmd_tick != 0 && (xTaskGetTickCount() - last_cmd_tick) > pdMS_TO_TICKS(CMD_TIMEOUT_MS)) {
         enterFailsafe();
     }
 }
@@ -298,4 +304,29 @@ bool control_loop_get_armed(void)
 bool control_loop_get_link(void)
 {
     return link_ok;
+}
+
+// =============================================================================
+// FreeRTOS CONTROL TASK
+// =============================================================================
+void control_task(void *argument)
+{
+    // This task doesn't use its argument.
+	(void)argument;
+
+    // Run forever because FreeRTOS tasks are persistent execution contexts.
+    for (;;)
+    {
+        // Block until TIM7 sends this task a notification.
+        // The task should wait indefinitely.
+    	ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+
+        // TIM7 notified us, so execute exactly one control-loop iteration.
+        // Loop back and wait for the next TIM7 notification.
+    	control_loop_tick();
+
+    	// Toggle PA5 to measure actual task execution
+    	GPIOA->ODR ^= (1U << 5);
+
+    }
 }

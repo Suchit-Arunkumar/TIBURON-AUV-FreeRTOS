@@ -23,6 +23,7 @@
 #include "timer_timebase.h"
 #include "iwdg.h"
 
+
 static void dummy_task(void *argument)
 {
     (void)argument;
@@ -128,18 +129,29 @@ int main(void)
     // 15. Initialize microsecond timebase
     timer2_timebase_init();
 
-    // 16. Initialize control loop state
-    control_loop_init();
-
-    // 17. Start 50 Hz control loop timer ISR
-    tim7_init();
-
     // 18. Arm watchdog LAST
    // iwdg_init();
 
     SCB->AIRCR =
         (0x5FAUL << SCB_AIRCR_VECTKEY_Pos) |
         (3UL << SCB_AIRCR_PRIGROUP_Pos);
+
+    // 16. Initialize control loop state
+    control_loop_init();
+
+    xTaskCreate(
+        control_task,
+        "Control Task",
+        256,
+        NULL,
+        6,
+        &controlTaskHandle
+    );
+
+    // 17. Start 50 Hz control loop timer ISR
+    tim7_init();
+
+
 
     xTaskCreate(
         dummy_task,
