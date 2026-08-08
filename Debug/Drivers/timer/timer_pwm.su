@@ -1,0 +1,2 @@
+../Drivers/timer/timer_pwm.c:3:6:timer3_pwm_init	4	static
+../Drivers/timer/timer_pwm.c:39:6:pwm_set_us	16	static

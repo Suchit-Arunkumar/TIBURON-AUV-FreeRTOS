@@ -1,0 +1,8 @@
+../Drivers/spi/spi.c:4:6:spi1_init	4	static
+../Drivers/spi/spi.c:63:6:spi_transmit	16	static
+../Drivers/spi/spi.c:81:9:spi_transfer	16	static
+../Drivers/spi/spi.c:96:9:spi_receive	8	static
+../Drivers/spi/spi.c:102:6:spi_select_oled	4	static
+../Drivers/spi/spi.c:108:6:spi_deselect_oled	4	static
+../Drivers/spi/spi.c:114:6:spi_select_sd	4	static
+../Drivers/spi/spi.c:120:6:spi_deselect_sd	4	static

@@ -1,0 +1,2 @@
+../Drivers/adc/adc.c:3:6:adc_init	4	static
+../Drivers/adc/adc.c:19:10:adc_read	16	static

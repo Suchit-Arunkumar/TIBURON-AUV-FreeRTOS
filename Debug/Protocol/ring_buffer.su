@@ -1,0 +1,4 @@
+../Protocol/ring_buffer.c:16:6:rx_write	24	static
+../Protocol/ring_buffer.c:38:10:rx_avail	4	static
+../Protocol/ring_buffer.c:44:9:rx_peek	16	static
+../Protocol/ring_buffer.c:50:6:rx_eat	16	static

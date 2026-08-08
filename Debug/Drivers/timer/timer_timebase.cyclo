@@ -1,0 +1,2 @@
+../Drivers/timer/timer_timebase.c:3:6:timer2_timebase_init	1
+../Drivers/timer/timer_timebase.c:22:10:micros	1

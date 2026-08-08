@@ -1,0 +1,2 @@
+../Drivers/dac/dac.c:3:6:dac_init	1
+../Drivers/dac/dac.c:23:6:dac_set	1

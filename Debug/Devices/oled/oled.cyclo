@@ -1,0 +1,8 @@
+../Devices/oled/oled.c:110:13:dc_res_init	1
+../Devices/oled/oled.c:127:13:write_cmd	1
+../Devices/oled/oled.c:142:13:write_data	1
+../Devices/oled/oled.c:157:13:delay_ms_simple	2
+../Devices/oled/oled.c:162:6:oled_init	1
+../Devices/oled/oled.c:199:6:oled_clear	1
+../Devices/oled/oled.c:204:6:oled_update	2
+../Devices/oled/oled.c:227:6:oled_draw_string	6

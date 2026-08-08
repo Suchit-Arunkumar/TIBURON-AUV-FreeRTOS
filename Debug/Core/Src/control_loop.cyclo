@@ -1,0 +1,13 @@
+../Core/Src/control_loop.c:95:21:wrapAngle180	3
+../Core/Src/control_loop.c:102:12:thrust_to_pwm	4
+../Core/Src/control_loop.c:115:6:control_loop_init	2
+../Core/Src/control_loop.c:131:6:control_loop_tick	2
+../Core/Src/control_loop.c:145:6:cmd_update	1
+../Core/Src/control_loop.c:159:6:computePID	8
+../Core/Src/control_loop.c:191:6:computeAllocation	18
+../Core/Src/control_loop.c:231:6:applyPWM	8
+../Core/Src/control_loop.c:255:6:enterFailsafe	2
+../Core/Src/control_loop.c:267:6:checkCommandTimeout	3
+../Core/Src/control_loop.c:275:6:control_loop_get_pwm	4
+../Core/Src/control_loop.c:293:6:control_loop_get_armed	1
+../Core/Src/control_loop.c:298:6:control_loop_get_link	1

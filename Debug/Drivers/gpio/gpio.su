@@ -1,0 +1,4 @@
+../Drivers/gpio/gpio.c:3:6:gpio_init	16	static
+../Drivers/gpio/gpio.c:18:6:gpio_set	16	static
+../Drivers/gpio/gpio.c:23:6:gpio_clear	16	static
+../Drivers/gpio/gpio.c:28:6:gpio_toggle	16	static

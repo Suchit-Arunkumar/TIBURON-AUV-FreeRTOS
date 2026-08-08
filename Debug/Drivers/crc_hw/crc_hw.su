@@ -1,0 +1,2 @@
+../Drivers/crc_hw/crc_hw.c:3:6:crc_init	4	static
+../Drivers/crc_hw/crc_hw.c:9:10:crc_compute	40	static

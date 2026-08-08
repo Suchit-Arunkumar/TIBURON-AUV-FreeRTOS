@@ -1,0 +1,2 @@
+../Devices/bar30/bar30.c:14:6:bar30_init	16	static
+../Devices/bar30/bar30.c:42:7:bar30_read	232	static
