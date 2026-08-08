@@ -19,7 +19,7 @@ void tim7_init(void)
 	TIM7->DIER |= TIM_DIER_UIE;
 
     // 5. Set NVIC priority for TIM7_IRQn to 0
-	NVIC_SetPriority(TIM7_IRQn, 0);
+	NVIC_SetPriority(TIM7_IRQn, 5);
 
     // 6. Enable TIM7_IRQn in NVIC
 	NVIC_EnableIRQ(TIM7_IRQn);
