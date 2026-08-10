@@ -17,6 +17,9 @@
 #include <stdbool.h>
 #include "FreeRTOS.h"
 #include "task.h"
+#include "packet.h"
+#include "comms_task.h"
+
 
 // =============================================================================
 // SECTION 1 — CONSTANTS
@@ -315,18 +318,37 @@ void control_task(void *argument)
 	(void)argument;
 
     // Run forever because FreeRTOS tasks are persistent execution contexts.
-    for (;;)
-    {
-        // Block until TIM7 sends this task a notification.
-        // The task should wait indefinitely.
-    	ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+	for (;;)
+	{
+	    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
-        // TIM7 notified us, so execute exactly one control-loop iteration.
-        // Loop back and wait for the next TIM7 notification.
-    	control_loop_tick();
+	    CommandPayload cmd;
 
-    	// Toggle PA5 to measure actual task execution
-    	GPIOA->ODR ^= (1U << 5);
+	    if (xQueueReceive(commandQueue, &cmd, 0) == pdPASS)
+	    {
+	        float new_pose[6] = {
+	            cmd.current_x,
+	            cmd.current_y,
+	            cmd.current_z,
+	            cmd.current_roll,
+	            cmd.current_pitch,
+	            cmd.current_yaw
+	        };
 
-    }
+	        float new_target[6] = {
+	            cmd.target_x,
+	            cmd.target_y,
+	            cmd.target_z,
+	            cmd.target_roll,
+	            cmd.target_pitch,
+	            cmd.target_yaw
+	        };
+
+	        cmd_update(new_pose, new_target, cmd.armed);
+	    }
+
+	    control_loop_tick();
+
+	    GPIOA->ODR ^= (1U << 5);
+	}
 }

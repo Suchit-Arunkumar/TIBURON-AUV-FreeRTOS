@@ -1,6 +1,7 @@
 #include "uart_packet.h"
 #include "stm32f446xx.h"
 #include "ring_buffer.h"
+#include "comms_task.h"
 
 #define APB2CLK 90000000U
 #define UART1_BR 115200U
@@ -88,7 +89,7 @@ void uart1_init(void)
 
 
 	 // 14. enable USART1 interrupt in NVIC
-	 NVIC_SetPriority(USART1_IRQn, 1);
+	 NVIC_SetPriority(USART1_IRQn, 5);
 	 NVIC_EnableIRQ(USART1_IRQn);
 
 }
@@ -135,7 +136,15 @@ void USART1_IRQHandler(void)
         last_dma_pos = current_pos;
 
         (void)dummy;
-    }
+
+        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+        vTaskNotifyGiveFromISR(commsTaskHandle,&xHigherPriorityTaskWoken);
+
+        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+
+
+  }
 }
 
 

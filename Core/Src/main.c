@@ -22,6 +22,7 @@
 #include "timer_pwm.h"
 #include "timer_timebase.h"
 #include "iwdg.h"
+#include "comms_task.h"
 
 
 static void dummy_task(void *argument)
@@ -139,17 +140,29 @@ int main(void)
     // 16. Initialize control loop state
     control_loop_init();
 
+    // 17. Start 50 Hz control loop timer ISR
+        tim7_init();
+
+    //TASKS & QUEUES
+    commandQueue = xQueueCreate(4, sizeof(CommandPayload));
+
     xTaskCreate(
         control_task,
         "Control Task",
         256,
         NULL,
-        6,
+        7,
         &controlTaskHandle
     );
 
-    // 17. Start 50 Hz control loop timer ISR
-    tim7_init();
+    xTaskCreate(
+        comms_task,
+        "Comms Task",
+        256,
+        NULL,
+        5,
+        &commsTaskHandle
+    );
 
 
 
