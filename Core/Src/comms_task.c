@@ -1,41 +1,74 @@
 #include "comms_task.h"
 #include "packet.h"
+#include "uart_packet.h"
+#include "control_loop.h"
 
 TaskHandle_t commsTaskHandle = NULL;
 QueueHandle_t commandQueue = NULL;
 
+TelemetryPayload telemetry;
+uint8_t tx_buf[PACKET_SIZE];
 
 void comms_task(void *argument)
 {
     (void)argument;
 
-    while (1)
+    CommandPayload cmd;
+
+    for (;;)
     {
-        // TODO 1:
-        // Block here until USART1 ISR notifies this task.
-        ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+        /*
+         * Wait for either:
+         * notification 0 = incoming UART command
+         * notification 1 = telemetry transmission request
+         */
+        uint32_t rx_notify =
+            ulTaskNotifyTakeIndexed(0, pdTRUE, 0);
 
+        uint32_t tx_notify =
+            ulTaskNotifyTakeIndexed(1, pdTRUE, 0);
 
-        // TODO 2:
-        // Create a local CommandPayload variable.
-        // This will hold the parsed command.
-        CommandPayload cmd;
+        if (rx_notify == 0 && tx_notify == 0)
+        {
+            /*
+             * Nothing pending.
+             * Sleep briefly rather than busy-looping.
+             */
+            vTaskDelay(pdMS_TO_TICKS(1));
+            continue;
+        }
 
+        /* ---------------- RX COMMANDS ---------------- */
 
-        // TODO 3:
-        // Try to parse a command from the ring buffer.
-        // packet_parse_cmd() returns:
-        //   1 -> valid packet parsed
-        //   0 -> no valid packet available
-        if (packet_parse_cmd(&cmd))
-          {
-              // valid command
-        	xQueueSend(commandQueue ,&cmd , pdMS_TO_TICKS(1));
-          }
+        if (rx_notify > 0)
+        {
+            if (packet_parse_cmd(&cmd))
+            {
+                xQueueSend(
+                    commandQueue,
+                    &cmd,
+                    pdMS_TO_TICKS(1)
+                );
+            }
+        }
+
+        /* ---------------- TELEMETRY TX ---------------- */
+
+        if (tx_notify > 0)
+        {
+        	if (tx_notify > 0)
+        	{
+        	    memset(&telemetry, 0, sizeof(telemetry));
+
+        	    telemetry.armed = control_loop_get_armed();
+        	    telemetry.link_ok = control_loop_get_link();
+
+        	    control_loop_get_pwm(telemetry.esc_pwm, 8);
+
+        	    packet_build_telemetry(&telemetry, tx_buf);
+
+        	    uart1_write_buf(tx_buf, PACKET_SIZE);
+        	}
+        }
     }
-
-
-
-
-
 }
