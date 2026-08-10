@@ -350,7 +350,11 @@ void control_task(void *argument)
 	    control_loop_tick();
 
 	    /* Tell Comms Task that a telemetry update is ready */
-	    xTaskNotifyGiveIndexed(commsTaskHandle, 1);
+	    xTaskNotify(
+	        commsTaskHandle,
+	        (1UL << 1),
+	        eSetBits
+	    );
 
 	    GPIOA->ODR ^= (1U << 5);
 	}
