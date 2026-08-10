@@ -29,7 +29,10 @@ Core/Src/main.o: ../Core/Src/main.c \
  C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Protocol/sd_card/sd_logger.h \
  C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Protocol/sd_card/sd_card.h \
  ../Drivers/crc_hw/crc_hw.h ../Drivers/i2c/i2c.h ../Devices/bar30/bar30.h \
- ../Drivers/timer/timer_timebase.h ../Drivers/iwdg/iwdg.h
+ ../Drivers/timer/timer_timebase.h ../Drivers/iwdg/iwdg.h \
+ ../Core/Inc/comms_task.h \
+ C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/queue.h \
+ C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/task.h
 C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/FreeRTOS.h:
 ../Core/Inc/FreeRTOSConfig.h:
 C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/projdefs.h:
@@ -72,3 +75,6 @@ C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Protocol/sd_card/sd_card.h:
 ../Devices/bar30/bar30.h:
 ../Drivers/timer/timer_timebase.h:
 ../Drivers/iwdg/iwdg.h:
+../Core/Inc/comms_task.h:
+C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/queue.h:
+C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/task.h:

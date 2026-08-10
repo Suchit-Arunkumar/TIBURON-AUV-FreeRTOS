@@ -1,4 +1,4 @@
-../Protocol/ring_buffer.c:16:6:rx_write	24	static
-../Protocol/ring_buffer.c:38:10:rx_avail	4	static
-../Protocol/ring_buffer.c:44:9:rx_peek	16	static
-../Protocol/ring_buffer.c:50:6:rx_eat	16	static
+../Protocol/ring_buffer.c:18:6:rx_write	24	static,ignoring_inline_asm
+../Protocol/ring_buffer.c:43:10:rx_avail	4	static
+../Protocol/ring_buffer.c:49:9:rx_peek	16	static
+../Protocol/ring_buffer.c:55:6:rx_eat	16	static,ignoring_inline_asm

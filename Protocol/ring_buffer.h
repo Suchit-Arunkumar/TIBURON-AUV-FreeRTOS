@@ -1,4 +1,5 @@
 #include <stdint.h>
+#include "stm32f4xx.h"
 
 #ifndef RING_BUFFER_H
 #define RING_BUFFER_H

@@ -1,4 +1,6 @@
 #include "ring_buffer.h"
+#include "stm32f4xx.h"
+
 
 // internal buffer
 static uint8_t  rx_buf[RX_BUF_SIZE];
@@ -28,7 +30,10 @@ void rx_write(uint8_t *data, uint16_t len)
 			rx_buf[rx_head] = data[i];
 			rx_head++;
 			rx_head = (rx_head % RX_BUF_SIZE);
+
+			__disable_irq();
 			rx_count++;
+			__enable_irq();
 
 		}
 
@@ -57,5 +62,7 @@ void rx_eat(uint16_t len)
 	rx_tail += len;
 	rx_tail = rx_tail % RX_BUF_SIZE;
 
-	rx_count = (rx_count - len);
+	 __disable_irq();
+	 rx_count -= len;
+	 __enable_irq();
 }
