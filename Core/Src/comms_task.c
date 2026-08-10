@@ -2,46 +2,31 @@
 #include "packet.h"
 #include "uart_packet.h"
 #include "control_loop.h"
+#include <string.h>
 
 TaskHandle_t commsTaskHandle = NULL;
 QueueHandle_t commandQueue = NULL;
-
-TelemetryPayload telemetry;
-uint8_t tx_buf[PACKET_SIZE];
 
 void comms_task(void *argument)
 {
     (void)argument;
 
-    CommandPayload cmd;
-
     for (;;)
     {
+        uint32_t notify_value;
+
         /*
-         * Wait for either:
-         * notification 0 = incoming UART command
-         * notification 1 = telemetry transmission request
+         * Block until either:
+         * bit 0 = RX command event
+         * bit 1 = telemetry TX event
          */
-        uint32_t rx_notify =
-            ulTaskNotifyTakeIndexed(0, pdTRUE, 0);
+        notify_value = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
-        uint32_t tx_notify =
-            ulTaskNotifyTakeIndexed(1, pdTRUE, 0);
-
-        if (rx_notify == 0 && tx_notify == 0)
+        /* RX: command packet arrived */
+        if (notify_value & (1UL << 0))
         {
-            /*
-             * Nothing pending.
-             * Sleep briefly rather than busy-looping.
-             */
-            vTaskDelay(pdMS_TO_TICKS(1));
-            continue;
-        }
+            CommandPayload cmd;
 
-        /* ---------------- RX COMMANDS ---------------- */
-
-        if (rx_notify > 0)
-        {
             if (packet_parse_cmd(&cmd))
             {
                 xQueueSend(
@@ -52,23 +37,31 @@ void comms_task(void *argument)
             }
         }
 
-        /* ---------------- TELEMETRY TX ---------------- */
-
-        if (tx_notify > 0)
+        /* TX: telemetry requested */
+        if (notify_value & (1UL << 1))
         {
-        	if (tx_notify > 0)
-        	{
-        	    memset(&telemetry, 0, sizeof(telemetry));
+            TelemetryPayload telemetry;
+            uint8_t tx_buf[PACKET_SIZE];
 
-        	    telemetry.armed = control_loop_get_armed();
-        	    telemetry.link_ok = control_loop_get_link();
+            memset(&telemetry, 0, sizeof(telemetry));
 
-        	    control_loop_get_pwm(telemetry.esc_pwm, 8);
+            telemetry.armed = control_loop_get_armed();
+            telemetry.link_ok = control_loop_get_link();
 
-        	    packet_build_telemetry(&telemetry, tx_buf);
+            control_loop_get_pwm(
+                telemetry.esc_pwm,
+                8
+            );
 
-        	    uart1_write_buf(tx_buf, PACKET_SIZE);
-        	}
+            packet_build_telemetry(
+                &telemetry,
+                tx_buf
+            );
+
+            uart1_write_buf(
+                tx_buf,
+                PACKET_SIZE
+            );
         }
     }
 }
