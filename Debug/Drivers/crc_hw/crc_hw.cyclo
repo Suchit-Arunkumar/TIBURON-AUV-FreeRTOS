@@ -1,2 +1,0 @@
-../Drivers/crc_hw/crc_hw.c:3:6:crc_init	1
-../Drivers/crc_hw/crc_hw.c:9:10:crc_compute	4

@@ -1,5 +1,0 @@
-../Drivers/uart/uart.c:8:6:uart2_init	4	static
-../Drivers/uart/uart.c:45:6:uart2_write_byte	16	static
-../Drivers/uart/uart.c:55:6:uart2_write_buf	24	static
-../Drivers/uart/uart.c:66:6:uart2_write_str	16	static
-../Drivers/uart/uart.c:80:5:_write	24	static

@@ -1,2 +1,0 @@
-../Drivers/iwdg/iwdg.c:3:6:iwdg_init	1
-../Drivers/iwdg/iwdg.c:19:6:iwdg_kick	1
