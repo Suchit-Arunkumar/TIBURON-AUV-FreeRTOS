@@ -1,0 +1,2 @@
+../Drivers/iwdg/iwdg.c:3:6:iwdg_init	4	static
+../Drivers/iwdg/iwdg.c:19:6:iwdg_kick	4	static

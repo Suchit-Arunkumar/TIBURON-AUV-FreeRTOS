@@ -1,0 +1,5 @@
+../Drivers/uart/uart.c:8:6:uart2_init	1
+../Drivers/uart/uart.c:45:6:uart2_write_byte	2
+../Drivers/uart/uart.c:55:6:uart2_write_buf	2
+../Drivers/uart/uart.c:66:6:uart2_write_str	2
+../Drivers/uart/uart.c:80:5:_write	1

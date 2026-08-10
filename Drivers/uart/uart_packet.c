@@ -137,11 +137,15 @@ void USART1_IRQHandler(void)
 
         (void)dummy;
 
-        BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+        BaseType_t xHigherPriorityTaskWasWoken = pdFALSE;
 
-        vTaskNotifyGiveFromISR(commsTaskHandle,&xHigherPriorityTaskWoken);
+        vTaskNotifyGiveIndexedFromISR(
+            commsTaskHandle,
+            0,
+            &xHigherPriorityTaskWasWoken
+        );
 
-        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+        portYIELD_FROM_ISR(xHigherPriorityTaskWasWoken);
 
 
   }
