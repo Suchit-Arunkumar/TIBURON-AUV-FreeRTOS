@@ -13,14 +13,14 @@ void comms_task(void *argument)
 
     for (;;)
     {
-        uint32_t notify_value;
+    	uint32_t notify_value;
 
-        /*
-         * Block until either:
-         * bit 0 = RX command event
-         * bit 1 = telemetry TX event
-         */
-        notify_value = ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    	xTaskNotifyWait(
+    	    0,
+    	    0xFFFFFFFFUL,
+    	    &notify_value,
+    	    portMAX_DELAY
+    	);
 
         /* RX: command packet arrived */
         if (notify_value & (1UL << 0))

@@ -23,6 +23,7 @@
 #include "timer_timebase.h"
 #include "iwdg.h"
 #include "comms_task.h"
+#include "uart3.h"
 
 
 static void dummy_task(void *argument)
@@ -123,6 +124,7 @@ int main(void)
 
     // print confirmation message over UART2 that UART1 is up
     uart2_write_str("UART1 initialized\r\n");
+    uart3_init();
 
     // 14. Initialize thruster PWM outputs (neutral)
     timer3_pwm_init();
