@@ -26,6 +26,8 @@
 #include "uart3.h"
 #include "vn200_task.h"
 #include "vn200.h"
+#include "uart4.h"
+#include "dvl_task.h"
 
 //==========================================================================================================================
 static void dummy_task(void *argument)
@@ -128,6 +130,7 @@ int main(void)
     // print confirmation message over UART2 that UART1 is up
     uart2_write_str("UART1 initialized\r\n");
     uart3_init();
+    uart4_init();
 
     // 14. Initialize thruster PWM outputs (neutral)
     timer3_pwm_init();
@@ -152,6 +155,7 @@ int main(void)
 
     //TASKS & QUEUES
     commandQueue = xQueueCreate(4, sizeof(CommandPayload));
+    dvlQueue = xQueueCreate(1, sizeof(DVLData));
 
     xTaskCreate(
         control_task,
@@ -187,6 +191,15 @@ int main(void)
         NULL,
         1,
         NULL
+    );
+
+    xTaskCreate(
+        dvl_task,
+        "DVL Task",
+        256,
+        NULL,
+        4,
+        &dvlTaskHandle
     );
 
     vTaskStartScheduler();

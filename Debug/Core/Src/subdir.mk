@@ -7,6 +7,7 @@
 C_SRCS += \
 ../Core/Src/comms_task.c \
 ../Core/Src/control_loop.c \
+../Core/Src/dvl_task.c \
 ../Core/Src/main.c \
 ../Core/Src/stm32f4xx_it.c \
 ../Core/Src/syscalls.c \
@@ -18,6 +19,7 @@ C_SRCS += \
 OBJS += \
 ./Core/Src/comms_task.o \
 ./Core/Src/control_loop.o \
+./Core/Src/dvl_task.o \
 ./Core/Src/main.o \
 ./Core/Src/stm32f4xx_it.o \
 ./Core/Src/syscalls.o \
@@ -29,6 +31,7 @@ OBJS += \
 C_DEPS += \
 ./Core/Src/comms_task.d \
 ./Core/Src/control_loop.d \
+./Core/Src/dvl_task.d \
 ./Core/Src/main.d \
 ./Core/Src/stm32f4xx_it.d \
 ./Core/Src/syscalls.d \
@@ -47,7 +50,7 @@ Core/Src/main.o: ../Core/Src/main.c Core/Src/subdir.mk
 clean: clean-Core-2f-Src
 
 clean-Core-2f-Src:
-	-$(RM) ./Core/Src/comms_task.cyclo ./Core/Src/comms_task.d ./Core/Src/comms_task.o ./Core/Src/comms_task.su ./Core/Src/control_loop.cyclo ./Core/Src/control_loop.d ./Core/Src/control_loop.o ./Core/Src/control_loop.su ./Core/Src/main.cyclo ./Core/Src/main.d ./Core/Src/main.o ./Core/Src/main.su ./Core/Src/stm32f4xx_it.cyclo ./Core/Src/stm32f4xx_it.d ./Core/Src/stm32f4xx_it.o ./Core/Src/stm32f4xx_it.su ./Core/Src/syscalls.cyclo ./Core/Src/syscalls.d ./Core/Src/syscalls.o ./Core/Src/syscalls.su ./Core/Src/sysmem.cyclo ./Core/Src/sysmem.d ./Core/Src/sysmem.o ./Core/Src/sysmem.su ./Core/Src/system_init.cyclo ./Core/Src/system_init.d ./Core/Src/system_init.o ./Core/Src/system_init.su ./Core/Src/system_stm32f4xx.cyclo ./Core/Src/system_stm32f4xx.d ./Core/Src/system_stm32f4xx.o ./Core/Src/system_stm32f4xx.su ./Core/Src/vn200_task.cyclo ./Core/Src/vn200_task.d ./Core/Src/vn200_task.o ./Core/Src/vn200_task.su
+	-$(RM) ./Core/Src/comms_task.cyclo ./Core/Src/comms_task.d ./Core/Src/comms_task.o ./Core/Src/comms_task.su ./Core/Src/control_loop.cyclo ./Core/Src/control_loop.d ./Core/Src/control_loop.o ./Core/Src/control_loop.su ./Core/Src/dvl_task.cyclo ./Core/Src/dvl_task.d ./Core/Src/dvl_task.o ./Core/Src/dvl_task.su ./Core/Src/main.cyclo ./Core/Src/main.d ./Core/Src/main.o ./Core/Src/main.su ./Core/Src/stm32f4xx_it.cyclo ./Core/Src/stm32f4xx_it.d ./Core/Src/stm32f4xx_it.o ./Core/Src/stm32f4xx_it.su ./Core/Src/syscalls.cyclo ./Core/Src/syscalls.d ./Core/Src/syscalls.o ./Core/Src/syscalls.su ./Core/Src/sysmem.cyclo ./Core/Src/sysmem.d ./Core/Src/sysmem.o ./Core/Src/sysmem.su ./Core/Src/system_init.cyclo ./Core/Src/system_init.d ./Core/Src/system_init.o ./Core/Src/system_init.su ./Core/Src/system_stm32f4xx.cyclo ./Core/Src/system_stm32f4xx.d ./Core/Src/system_stm32f4xx.o ./Core/Src/system_stm32f4xx.su ./Core/Src/vn200_task.cyclo ./Core/Src/vn200_task.d ./Core/Src/vn200_task.o ./Core/Src/vn200_task.su
 
 .PHONY: clean-Core-2f-Src
 

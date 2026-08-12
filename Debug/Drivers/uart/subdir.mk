@@ -7,16 +7,19 @@
 C_SRCS += \
 ../Drivers/uart/uart.c \
 ../Drivers/uart/uart3.c \
+../Drivers/uart/uart4.c \
 ../Drivers/uart/uart_packet.c 
 
 OBJS += \
 ./Drivers/uart/uart.o \
 ./Drivers/uart/uart3.o \
+./Drivers/uart/uart4.o \
 ./Drivers/uart/uart_packet.o 
 
 C_DEPS += \
 ./Drivers/uart/uart.d \
 ./Drivers/uart/uart3.d \
+./Drivers/uart/uart4.d \
 ./Drivers/uart/uart_packet.d 
 
 
@@ -27,7 +30,7 @@ Drivers/uart/%.o Drivers/uart/%.su Drivers/uart/%.cyclo: ../Drivers/uart/%.c Dri
 clean: clean-Drivers-2f-uart
 
 clean-Drivers-2f-uart:
-	-$(RM) ./Drivers/uart/uart.cyclo ./Drivers/uart/uart.d ./Drivers/uart/uart.o ./Drivers/uart/uart.su ./Drivers/uart/uart3.cyclo ./Drivers/uart/uart3.d ./Drivers/uart/uart3.o ./Drivers/uart/uart3.su ./Drivers/uart/uart_packet.cyclo ./Drivers/uart/uart_packet.d ./Drivers/uart/uart_packet.o ./Drivers/uart/uart_packet.su
+	-$(RM) ./Drivers/uart/uart.cyclo ./Drivers/uart/uart.d ./Drivers/uart/uart.o ./Drivers/uart/uart.su ./Drivers/uart/uart3.cyclo ./Drivers/uart/uart3.d ./Drivers/uart/uart3.o ./Drivers/uart/uart3.su ./Drivers/uart/uart4.cyclo ./Drivers/uart/uart4.d ./Drivers/uart/uart4.o ./Drivers/uart/uart4.su ./Drivers/uart/uart_packet.cyclo ./Drivers/uart/uart_packet.d ./Drivers/uart/uart_packet.o ./Drivers/uart/uart_packet.su
 
 .PHONY: clean-Drivers-2f-uart
 
