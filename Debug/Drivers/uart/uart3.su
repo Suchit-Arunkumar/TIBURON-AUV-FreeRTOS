@@ -1,0 +1,6 @@
+../Drivers/CMSIS/Include/core_cm4.h:1684:22:__NVIC_EnableIRQ	16	static,ignoring_inline_asm
+../Drivers/CMSIS/Include/core_cm4.h:1814:22:__NVIC_SetPriority	16	static
+../Drivers/uart/uart3.c:18:13:uart3_rx_store	24	static
+../Drivers/uart/uart3.c:42:6:uart3_init	8	static
+../Drivers/uart/uart3.c:218:6:USART3_IRQHandler	16	static
+../Drivers/uart/uart3.c:280:10:uart3_read	24	static

@@ -25,17 +25,19 @@ void rx_write(uint8_t *data, uint16_t len)
 
         // 4. increment rx_count
 
-		for(int i = 0; i < len; i++){
+	__disable_irq();
 
-			rx_buf[rx_head] = data[i];
-			rx_head++;
-			rx_head = (rx_head % RX_BUF_SIZE);
+	for (uint16_t i = 0; i < len; i++)
+	{
+	    rx_buf[rx_head] = data[i];
 
-			__disable_irq();
-			rx_count++;
-			__enable_irq();
+	    rx_head++;
+	    rx_head %= RX_BUF_SIZE;
 
-		}
+	    rx_count++;
+	}
+
+	__enable_irq();
 
 
 }

@@ -32,7 +32,8 @@ Core/Src/main.o: ../Core/Src/main.c \
  ../Drivers/timer/timer_timebase.h ../Drivers/iwdg/iwdg.h \
  ../Core/Inc/comms_task.h \
  C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/queue.h \
- C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/task.h
+ C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/task.h \
+ ../Drivers/uart/uart3.h
 C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/FreeRTOS.h:
 ../Core/Inc/FreeRTOSConfig.h:
 C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/projdefs.h:
@@ -78,3 +79,4 @@ C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Protocol/sd_card/sd_card.h:
 ../Core/Inc/comms_task.h:
 C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/queue.h:
 C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/task.h:
+../Drivers/uart/uart3.h:

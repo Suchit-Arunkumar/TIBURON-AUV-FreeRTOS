@@ -20,6 +20,7 @@
 "./Drivers/timer/timer_pwm.o"
 "./Drivers/timer/timer_timebase.o"
 "./Drivers/uart/uart.o"
+"./Drivers/uart/uart3.o"
 "./Drivers/uart/uart_packet.o"
 "./Middlewares/FreeRTOS/Source/event_groups.o"
 "./Middlewares/FreeRTOS/Source/list.o"

@@ -146,6 +146,7 @@ void USART1_IRQHandler(void)
             &xHigherPriorityTaskWasWoken
         );
 
+        portYIELD_FROM_ISR(xHigherPriorityTaskWasWoken);
 
   }
 }
