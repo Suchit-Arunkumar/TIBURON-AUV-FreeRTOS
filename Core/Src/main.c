@@ -24,8 +24,10 @@
 #include "iwdg.h"
 #include "comms_task.h"
 #include "uart3.h"
+#include "vn200_task.h"
+#include "vn200.h"
 
-
+//==========================================================================================================================
 static void dummy_task(void *argument)
 {
     (void)argument;
@@ -38,6 +40,7 @@ static void dummy_task(void *argument)
     }
 }
 
+//==========================================================================================================================
 void vApplicationStackOverflowHook(
     TaskHandle_t xTask,
     char *pcTaskName
@@ -145,6 +148,8 @@ int main(void)
     // 17. Start 50 Hz control loop timer ISR
         tim7_init();
 
+        //==================================================================================================================
+
     //TASKS & QUEUES
     commandQueue = xQueueCreate(4, sizeof(CommandPayload));
 
@@ -166,7 +171,14 @@ int main(void)
         &commsTaskHandle
     );
 
-
+    xTaskCreate(
+        vn200_task,
+        "VN200 Task",
+        256,
+        NULL,
+        4,
+        &vn200TaskHandle
+    );
 
     xTaskCreate(
         dummy_task,
@@ -185,3 +197,4 @@ int main(void)
     }
 }
 
+//==========================================================================================================================
