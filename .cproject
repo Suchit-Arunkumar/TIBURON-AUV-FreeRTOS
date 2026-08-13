@@ -64,6 +64,8 @@
 									<listOptionValue builtIn="false" value="../Drivers/i2c"/>
 									<listOptionValue builtIn="false" value="../Devices/bar30"/>
 									<listOptionValue builtIn="false" value="../Drivers/iwdg"/>
+									<listOptionValue builtIn="false" value="&quot;${ProjDirPath}/Devices/vn200&quot;"/>
+									<listOptionValue builtIn="false" value="&quot;${ProjDirPath}/Devices/dvl&quot;"/>
 								</option>
 								<inputType id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c.1433887861" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c"/>
 							</tool>
@@ -113,6 +115,8 @@
 								<listOptionValue builtIn="false" value="../Drivers/i2c"/>
 								<listOptionValue builtIn="false" value="../Devices/bar30"/>
 								<listOptionValue builtIn="false" value="../Drivers/iwdg"/>
+								<listOptionValue builtIn="false" value="../../Devices/vn200"/>
+								<listOptionValue builtIn="false" value="../../Devices/dvl"/>
 							</option>
 							<inputType id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c.1671339068" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c"/>
 						</tool>
@@ -224,15 +228,6 @@
 	</storageModule>
 	<storageModule moduleId="org.eclipse.cdt.core.LanguageSettingsProviders"/>
 	<storageModule moduleId="org.eclipse.cdt.make.core.buildtargets"/>
-	<storageModule moduleId="scannerConfiguration">
-		<autodiscovery enabled="true" problemReportingEnabled="true" selectedProfileId=""/>
-		<scannerConfigBuildInfo instanceId="com.st.stm32cube.ide.mcu.gnu.managedbuild.config.exe.release.1583818848;com.st.stm32cube.ide.mcu.gnu.managedbuild.config.exe.release.1583818848.;com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.1507466216;com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c.614582256">
-			<autodiscovery enabled="false" problemReportingEnabled="true" selectedProfileId=""/>
-		</scannerConfigBuildInfo>
-		<scannerConfigBuildInfo instanceId="com.st.stm32cube.ide.mcu.gnu.managedbuild.config.exe.debug.1288160161;com.st.stm32cube.ide.mcu.gnu.managedbuild.config.exe.debug.1288160161.;com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.1941121141;com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c.1433887861">
-			<autodiscovery enabled="false" problemReportingEnabled="true" selectedProfileId=""/>
-		</scannerConfigBuildInfo>
-	</storageModule>
 	<storageModule moduleId="refreshScope" versionNumber="2">
 		<configuration configurationName="Debug">
 			<resource resourceType="PROJECT" workspacePath="/Nucleo_AUV_Bare_Metal"/>
@@ -240,5 +235,14 @@
 		<configuration configurationName="Release">
 			<resource resourceType="PROJECT" workspacePath="/Nucleo_AUV_Bare_Metal"/>
 		</configuration>
+	</storageModule>
+	<storageModule moduleId="scannerConfiguration">
+		<autodiscovery enabled="true" problemReportingEnabled="true" selectedProfileId=""/>
+		<scannerConfigBuildInfo instanceId="com.st.stm32cube.ide.mcu.gnu.managedbuild.config.exe.debug.1288160161;com.st.stm32cube.ide.mcu.gnu.managedbuild.config.exe.debug.1288160161.;com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.1941121141;com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c.1433887861">
+			<autodiscovery enabled="false" problemReportingEnabled="true" selectedProfileId=""/>
+		</scannerConfigBuildInfo>
+		<scannerConfigBuildInfo instanceId="com.st.stm32cube.ide.mcu.gnu.managedbuild.config.exe.release.1583818848;com.st.stm32cube.ide.mcu.gnu.managedbuild.config.exe.release.1583818848.;com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.1507466216;com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c.614582256">
+			<autodiscovery enabled="false" problemReportingEnabled="true" selectedProfileId=""/>
+		</scannerConfigBuildInfo>
 	</storageModule>
 </cproject>

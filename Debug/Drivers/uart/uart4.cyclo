@@ -1,6 +1,6 @@
 ../Drivers/CMSIS/Include/core_cm4.h:1684:22:__NVIC_EnableIRQ	2
 ../Drivers/CMSIS/Include/core_cm4.h:1814:22:__NVIC_SetPriority	2
-../Drivers/uart/uart4.c:23:13:uart4_rx_store	3
-../Drivers/uart/uart4.c:47:6:uart4_init	2
-../Drivers/uart/uart4.c:216:6:UART4_IRQHandler	6
-../Drivers/uart/uart4.c:297:10:uart4_read	5
+../Drivers/uart/uart4.c:20:13:uart4_rx_store	3
+../Drivers/uart/uart4.c:56:6:uart4_init	2
+../Drivers/uart/uart4.c:229:6:UART4_IRQHandler	6
+../Drivers/uart/uart4.c:317:10:uart4_read	5
