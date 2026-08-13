@@ -1,6 +1,9 @@
 #include "vn200.h"
 #include <string.h>
 
+#include "FreeRTOS.h"
+#include "task.h"
+
 #define VN200_SYNC              0xFA
 
 #define VN200_GROUP_IMU         0x04
@@ -173,12 +176,18 @@ bool vn200_get_data(VN200Data *out)
         return false;
     }
 
-    if (!vn200_latest.valid)
+    bool valid;
+
+    taskENTER_CRITICAL();
+
+    valid = vn200_latest.valid;
+
+    if (valid)
     {
-        return false;
+        *out = vn200_latest;
     }
 
-    *out = vn200_latest;
+    taskEXIT_CRITICAL();
 
-    return true;
+    return valid;
 }

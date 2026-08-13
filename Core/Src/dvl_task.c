@@ -7,6 +7,7 @@
 #include "FreeRTOS.h"
 #include "task.h"
 
+
 QueueHandle_t dvlQueue = NULL;
 
 
@@ -15,20 +16,22 @@ void dvl_task(void *argument)
 {
     (void)argument;
 
-    uint8_t rx_data[64];
+    uint8_t rx_data[128];
 
     while (1)
     {
         /*
-         * Sleep until UART4 IDLE ISR notifies us.
+         * Sleep until UART4 IDLE ISR wakes us.
          */
         ulTaskNotifyTake(
             pdTRUE,
             portMAX_DELAY
         );
 
+
         /*
-         * Drain bytes accumulated by UART4.
+         * Drain all bytes currently stored in the
+         * UART4 software ring buffer.
          */
         uint16_t received =
             uart4_read(
@@ -36,12 +39,32 @@ void dvl_task(void *argument)
                 sizeof(rx_data)
             );
 
+
         /*
-         * Feed bytes into DVL parser.
+         * Feed every byte into the DVL parser.
          */
-        for (uint16_t i = 0; i < received; i++)
+        for (uint16_t i = 0U; i < received; i++)
         {
-            dvl_feed_byte(rx_data[i]);
+            if (dvl_feed_byte(rx_data[i]))
+            {
+                DVLData data;
+
+                if (dvl_get_data(&data))
+                {
+                    /*
+                     * Queue length = 1.
+                     *
+                     * Keep newest measurement.
+                     */
+                    if (dvlQueue != NULL)
+                    {
+                        xQueueOverwrite(
+                            dvlQueue,
+                            &data
+                        );
+                    }
+                }
+            }
         }
     }
 }
