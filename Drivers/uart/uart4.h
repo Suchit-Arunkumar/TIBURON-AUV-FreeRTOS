@@ -12,6 +12,9 @@ extern TaskHandle_t dvlTaskHandle;
 
 void uart4_init(void);
 
-uint16_t uart4_read(uint8_t *out, uint16_t max_len);
+uint16_t uart4_read(
+    uint8_t *out,
+    uint16_t max_len
+);
 
 #endif
