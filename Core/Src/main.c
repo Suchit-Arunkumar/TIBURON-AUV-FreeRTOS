@@ -40,6 +40,8 @@
 #include "vn200.h"
 #include "dvl_task.h"
 #include "dvl.h"
+#include "filter_task.h"
+#include "bar30_task.h"
 
 
 //===========================================================================================================================
@@ -288,12 +290,37 @@ int main(void)
             sizeof(DVLData)
         );
 
+    /*
+     * VN-200 latest measurement queue.
+     */
+    vn200Queue =
+        xQueueCreate(
+            1,
+            sizeof(VN200Data)
+        );
+
+
+    /*
+     * DVL queue already exists.
+     */
+
+
+    /*
+     * Bar30 latest depth queue.
+     */
+    bar30Queue =
+        xQueueCreate(
+            1,
+            sizeof(float)
+        );
 
     /*
      * Verify queue creation.
      */
     if (commandQueue == NULL ||
-        dvlQueue == NULL)
+        dvlQueue == NULL ||
+        vn200Queue == NULL ||
+        bar30Queue == NULL)
     {
         printf(
             "QUEUE CREATE FAIL\r\n"
@@ -366,6 +393,71 @@ int main(void)
         &dvlTaskHandle
     );
 
+    /*
+     * Create Bar30 task.
+     *
+     * Priority = 4
+     */
+    xTaskCreate(
+        bar30_task,
+        "Bar30 Task",
+        256,
+        NULL,
+        4,
+        NULL
+    );
+
+
+    /*
+     * Create Phase 6 filter task.
+     *
+     * Priority = 6
+     *
+     * Control = 7
+     * Filter  = 6
+     * Comms   = 5
+     * Sensors = 4
+     */
+    xTaskCreate(
+        filter_task,
+        "Filter Task",
+        256,
+        NULL,
+        6,
+        NULL
+    );/*
+     * Create Bar30 task.
+     *
+     * Priority = 4
+     */
+    xTaskCreate(
+        bar30_task,
+        "Bar30 Task",
+        256,
+        NULL,
+        4,
+        NULL
+    );
+
+
+    /*
+     * Create Phase 6 filter task.
+     *
+     * Priority = 6
+     *
+     * Control = 7
+     * Filter  = 6
+     * Comms   = 5
+     * Sensors = 4
+     */
+    xTaskCreate(
+        filter_task,
+        "Filter Task",
+        256,
+        NULL,
+        6,
+        NULL
+    );
 
     /*
      * 25. Create dummy task.
