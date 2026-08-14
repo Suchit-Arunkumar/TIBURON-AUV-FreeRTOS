@@ -315,12 +315,22 @@ int main(void)
         );
 
     /*
+     * Latest state-estimate queue (filter_task -> control_task).
+     */
+    stateQueue =
+        xQueueCreate(
+            1,
+            sizeof(StateEstimate)
+        );
+
+    /*
      * Verify queue creation.
      */
     if (commandQueue == NULL ||
         dvlQueue == NULL ||
         vn200Queue == NULL ||
-        bar30Queue == NULL)
+        bar30Queue == NULL ||
+        stateQueue == NULL)
     {
         printf(
             "QUEUE CREATE FAIL\r\n"

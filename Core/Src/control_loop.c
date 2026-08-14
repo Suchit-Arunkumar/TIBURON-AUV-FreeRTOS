@@ -151,14 +151,23 @@ void control_loop_tick(void)
     applyPWM();
 }
 
-void cmd_update(const float new_pose[N_DOF],
-                const float new_target[N_DOF],
-                bool        arm_flag)
+void state_update(const StateEstimate *state)
 {
-    memcpy(pose,   new_pose,   N_DOF * sizeof(float));
+    if (state == NULL || !state->attitude_valid) return;
+
+    pose[0] = state->x;
+    pose[1] = state->y;
+    pose[2] = state->z;
+    pose[3] = state->roll;
+    pose[4] = state->pitch;
+    pose[5] = state->yaw;
+}
+
+void target_update(const float new_target[N_DOF], bool arm_flag)
+{
     memcpy(target, new_target, N_DOF * sizeof(float));
-    g_armed     = arm_flag;
-    link_ok     = true;
+    g_armed       = arm_flag;
+    link_ok       = true;
     last_cmd_tick = xTaskGetTickCount();
 }
 
@@ -322,19 +331,17 @@ void control_task(void *argument)
 	{
 	    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
+	    StateEstimate state;
+
+	    if (xQueueReceive(stateQueue, &state, 0) == pdPASS)
+	    {
+	        state_update(&state);
+	    }
+
 	    CommandPayload cmd;
 
 	    if (xQueueReceive(commandQueue, &cmd, 0) == pdPASS)
 	    {
-	        float new_pose[6] = {
-	            cmd.current_x,
-	            cmd.current_y,
-	            cmd.current_z,
-	            cmd.current_roll,
-	            cmd.current_pitch,
-	            cmd.current_yaw
-	        };
-
 	        float new_target[6] = {
 	            cmd.target_x,
 	            cmd.target_y,
@@ -344,7 +351,7 @@ void control_task(void *argument)
 	            cmd.target_yaw
 	        };
 
-	        cmd_update(new_pose, new_target, cmd.armed);
+	        target_update(new_target, cmd.armed);
 	    }
 
 	    control_loop_tick();

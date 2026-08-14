@@ -8,6 +8,8 @@
 #include "timer_pwm.h"
 #include "FreeRTOS.h"
 #include "task.h"
+#include "queue.h"
+#include "comp_filter.h"
 
 #define N_DOF           6
 #define N_THR           8
@@ -22,6 +24,7 @@ extern volatile uint32_t g_tick;
 extern bool link_ok;
 extern volatile uint8_t telem_pending;
 extern volatile uint8_t log_pending;
+extern QueueHandle_t stateQueue;
 
 void control_loop_get_pwm(uint16_t *out, uint8_t len);
 bool control_loop_get_armed(void);
@@ -31,7 +34,8 @@ void control_loop_init(void);
 
 void control_loop_tick(void);
 
-void cmd_update(const float new_pose[N_DOF],const float new_target[N_DOF],bool arm_flag);
+void state_update(const StateEstimate *state);
+void target_update(const float new_target[N_DOF], bool arm_flag);
 
 void enterFailsafe(void);
 
