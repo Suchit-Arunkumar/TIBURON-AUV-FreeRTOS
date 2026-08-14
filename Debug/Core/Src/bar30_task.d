@@ -1,4 +1,4 @@
-Core/Src/vn200_task.o: ../Core/Src/vn200_task.c ../Core/Inc/vn200_task.h \
+Core/Src/bar30_task.o: ../Core/Src/bar30_task.c ../Core/Inc/bar30_task.h \
  C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/FreeRTOS.h \
  ../Core/Inc/FreeRTOSConfig.h \
  C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/projdefs.h \
@@ -9,10 +9,16 @@ Core/Src/vn200_task.o: ../Core/Src/vn200_task.c ../Core/Inc/vn200_task.h \
  C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/queue.h \
  C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/task.h \
  C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/list.h \
- ../Drivers/uart/uart3.h \
- C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/task.h \
- C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Devices/vn200/vn200.h
-../Core/Inc/vn200_task.h:
+ ../Devices/bar30/bar30.h \
+ ../Drivers/CMSIS/Device/ST/STM32F4xx/Include/stm32f446xx.h \
+ ../Drivers/CMSIS/Include/core_cm4.h \
+ ../Drivers/CMSIS/Include/cmsis_version.h \
+ ../Drivers/CMSIS/Include/cmsis_compiler.h \
+ ../Drivers/CMSIS/Include/cmsis_gcc.h \
+ ../Drivers/CMSIS/Include/mpu_armv7.h \
+ ../Drivers/CMSIS/Device/ST/STM32F4xx/Include/system_stm32f4xx.h \
+ C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/task.h
+../Core/Inc/bar30_task.h:
 C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/FreeRTOS.h:
 ../Core/Inc/FreeRTOSConfig.h:
 C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/projdefs.h:
@@ -23,6 +29,12 @@ C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/mp
 C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/queue.h:
 C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/task.h:
 C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/list.h:
-../Drivers/uart/uart3.h:
+../Devices/bar30/bar30.h:
+../Drivers/CMSIS/Device/ST/STM32F4xx/Include/stm32f446xx.h:
+../Drivers/CMSIS/Include/core_cm4.h:
+../Drivers/CMSIS/Include/cmsis_version.h:
+../Drivers/CMSIS/Include/cmsis_compiler.h:
+../Drivers/CMSIS/Include/cmsis_gcc.h:
+../Drivers/CMSIS/Include/mpu_armv7.h:
+../Drivers/CMSIS/Device/ST/STM32F4xx/Include/system_stm32f4xx.h:
 C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/task.h:
-C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Devices/vn200/vn200.h:

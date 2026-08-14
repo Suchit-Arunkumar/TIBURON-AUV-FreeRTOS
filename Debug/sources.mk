@@ -25,7 +25,9 @@ SUBDIRS := \
 Core/Src \
 Core/Startup \
 Devices/bar30 \
+Devices/dvl \
 Devices/oled \
+Devices/vn200 \
 Drivers/adc \
 Drivers/crc_hw \
 Drivers/dac \

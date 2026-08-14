@@ -23,7 +23,9 @@ RM := rm -rf
 -include Drivers/dac/subdir.mk
 -include Drivers/crc_hw/subdir.mk
 -include Drivers/adc/subdir.mk
+-include Devices/vn200/subdir.mk
 -include Devices/oled/subdir.mk
+-include Devices/dvl/subdir.mk
 -include Devices/bar30/subdir.mk
 -include Core/Startup/subdir.mk
 -include Core/Src/subdir.mk

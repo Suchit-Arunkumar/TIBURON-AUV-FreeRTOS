@@ -1,4 +1,4 @@
-Core/Src/vn200_task.o: ../Core/Src/vn200_task.c ../Core/Inc/vn200_task.h \
+Devices/dvl/dvl.o: ../Devices/dvl/dvl.c ../Devices/dvl/dvl.h \
  C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/FreeRTOS.h \
  ../Core/Inc/FreeRTOSConfig.h \
  C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/projdefs.h \
@@ -6,13 +6,9 @@ Core/Src/vn200_task.o: ../Core/Src/vn200_task.c ../Core/Inc/vn200_task.h \
  C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/deprecated_definitions.h \
  C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/portable/GCC/ARM_CM4F/portmacro.h \
  C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/mpu_wrappers.h \
- C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/queue.h \
  C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/task.h \
- C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/list.h \
- ../Drivers/uart/uart3.h \
- C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/task.h \
- C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Devices/vn200/vn200.h
-../Core/Inc/vn200_task.h:
+ C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/list.h
+../Devices/dvl/dvl.h:
 C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/FreeRTOS.h:
 ../Core/Inc/FreeRTOSConfig.h:
 C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/projdefs.h:
@@ -20,9 +16,5 @@ C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/po
 C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/deprecated_definitions.h:
 C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/portable/GCC/ARM_CM4F/portmacro.h:
 C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/mpu_wrappers.h:
-C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/queue.h:
 C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/task.h:
 C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/list.h:
-../Drivers/uart/uart3.h:
-C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/task.h:
-C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Devices/vn200/vn200.h:

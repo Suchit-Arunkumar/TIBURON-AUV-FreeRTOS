@@ -426,38 +426,6 @@ int main(void)
         6,
         NULL
     );/*
-     * Create Bar30 task.
-     *
-     * Priority = 4
-     */
-    xTaskCreate(
-        bar30_task,
-        "Bar30 Task",
-        256,
-        NULL,
-        4,
-        NULL
-    );
-
-
-    /*
-     * Create Phase 6 filter task.
-     *
-     * Priority = 6
-     *
-     * Control = 7
-     * Filter  = 6
-     * Comms   = 5
-     * Sensors = 4
-     */
-    xTaskCreate(
-        filter_task,
-        "Filter Task",
-        256,
-        NULL,
-        6,
-        NULL
-    );
 
     /*
      * 25. Create dummy task.

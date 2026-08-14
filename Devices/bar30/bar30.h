@@ -1,13 +1,14 @@
-#ifndef BAR30_TASK_H
-#define BAR30_TASK_H
+#ifndef BAR30_H
+#define BAR30_H
 
-#include "FreeRTOS.h"
-#include "queue.h"
-
-
-extern QueueHandle_t bar30Queue;
+#include <stm32f446xx.h>
+#include <stdint.h>
 
 
-void bar30_task(void *argument);
+// declare bar30_init()
+void bar30_init(void);
+
+// declare bar30_read()  -- returns float (depth in meters)
+float bar30_read(void);
 
 #endif
