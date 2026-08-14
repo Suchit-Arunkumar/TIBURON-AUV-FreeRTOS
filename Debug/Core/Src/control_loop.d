@@ -17,9 +17,12 @@ Core/Src/control_loop.o: ../Core/Src/control_loop.c \
  C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/mpu_wrappers.h \
  C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/task.h \
  C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/list.h \
- ../Protocol/packet.h ../Protocol/struct.h ../Core/Inc/comms_task.h \
  C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/queue.h \
- C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/task.h
+ C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/task.h \
+ ../Core/Inc/comp_filter.h \
+ C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Devices/vn200/vn200.h \
+ C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Devices/dvl/dvl.h \
+ ../Protocol/packet.h ../Protocol/struct.h ../Core/Inc/comms_task.h
 ../Core/Inc/control_loop.h:
 ../Core/Inc/main.h:
 ../Drivers/CMSIS/Device/ST/STM32F4xx/Include/stm32f446xx.h:
@@ -39,8 +42,11 @@ C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/portable/G
 C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/mpu_wrappers.h:
 C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/task.h:
 C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/list.h:
+C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/queue.h:
+C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/task.h:
+../Core/Inc/comp_filter.h:
+C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Devices/vn200/vn200.h:
+C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Devices/dvl/dvl.h:
 ../Protocol/packet.h:
 ../Protocol/struct.h:
 ../Core/Inc/comms_task.h:
-C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/queue.h:
-C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/task.h:

@@ -12,6 +12,7 @@
 extern QueueHandle_t vn200Queue;
 extern QueueHandle_t dvlQueue;
 extern QueueHandle_t bar30Queue;
+extern QueueHandle_t stateQueue;
 
 
 void filter_task(void *argument);

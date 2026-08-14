@@ -22,7 +22,9 @@ Core/Src/comms_task.o: ../Core/Src/comms_task.c ../Core/Inc/comms_task.h \
  ../Drivers/CMSIS/Device/ST/STM32F4xx/Include/stm32f4xx.h \
  ../Drivers/CMSIS/Device/ST/STM32F4xx/Include/stm32f446xx.h \
  ../Core/Inc/control_loop.h ../Core/Inc/main.h \
- ../Drivers/timer/timer_pwm.h
+ ../Drivers/timer/timer_pwm.h ../Core/Inc/comp_filter.h \
+ C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Devices/vn200/vn200.h \
+ C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Devices/dvl/dvl.h
 ../Core/Inc/comms_task.h:
 C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/FreeRTOS.h:
 ../Core/Inc/FreeRTOSConfig.h:
@@ -51,3 +53,6 @@ C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/ta
 ../Core/Inc/control_loop.h:
 ../Core/Inc/main.h:
 ../Drivers/timer/timer_pwm.h:
+../Core/Inc/comp_filter.h:
+C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Devices/vn200/vn200.h:
+C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Devices/dvl/dvl.h:

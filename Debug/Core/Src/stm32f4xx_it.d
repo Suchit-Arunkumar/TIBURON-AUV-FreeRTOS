@@ -21,6 +21,11 @@ Core/Src/stm32f4xx_it.o: ../Core/Src/stm32f4xx_it.c ../Core/Inc/main.h \
  C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/mpu_wrappers.h \
  C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/task.h \
  C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/list.h \
+ C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/queue.h \
+ C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/task.h \
+ ../Core/Inc/comp_filter.h \
+ C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Devices/vn200/vn200.h \
+ C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Devices/dvl/dvl.h \
  ../Drivers/timer/timer_basic.h \
  C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Protocol/sd_card/sd_logger.h \
  C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Protocol/sd_card/sd_card.h
@@ -50,6 +55,11 @@ C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/portable/G
 C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/mpu_wrappers.h:
 C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/task.h:
 C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/list.h:
+C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/queue.h:
+C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Middlewares/FreeRTOS/Source/include/task.h:
+../Core/Inc/comp_filter.h:
+C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Devices/vn200/vn200.h:
+C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Devices/dvl/dvl.h:
 ../Drivers/timer/timer_basic.h:
 C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Protocol/sd_card/sd_logger.h:
 C:/STM32_Files/Nucleo_AUV_Bare_Metal+RTOS/Protocol/sd_card/sd_card.h:
