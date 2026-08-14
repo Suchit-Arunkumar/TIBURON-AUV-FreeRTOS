@@ -1,3 +1,0 @@
-../Devices/bar30/bar30.c:13:13:delay_ms_simple	2
-../Devices/bar30/bar30.c:19:6:bar30_init	2
-../Devices/bar30/bar30.c:37:7:bar30_read	6

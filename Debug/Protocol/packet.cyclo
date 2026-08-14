@@ -1,2 +1,0 @@
-../Protocol/packet.c:6:6:packet_build_telemetry	1
-../Protocol/packet.c:29:9:packet_parse_cmd	8

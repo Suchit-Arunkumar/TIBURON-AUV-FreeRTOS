@@ -1,8 +1,0 @@
-../Devices/oled/oled.c:110:13:dc_res_init	4	static
-../Devices/oled/oled.c:127:13:write_cmd	16	static
-../Devices/oled/oled.c:142:13:write_data	16	static
-../Devices/oled/oled.c:157:13:delay_ms_simple	24	static,ignoring_inline_asm
-../Devices/oled/oled.c:162:6:oled_init	8	static
-../Devices/oled/oled.c:199:6:oled_clear	8	static
-../Devices/oled/oled.c:204:6:oled_update	16	static
-../Devices/oled/oled.c:227:6:oled_draw_string	24	static

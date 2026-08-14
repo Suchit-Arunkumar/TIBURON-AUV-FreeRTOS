@@ -1,7 +1,0 @@
-../Core/Src/comp_filter.c:37:14:deg_to_rad	16	static
-../Core/Src/comp_filter.c:51:13:rotate_body_to_world	64	static
-../Core/Src/comp_filter.c:99:13:gravity_compensate	24	static
-../Core/Src/comp_filter.c:125:6:comp_filter_init	8	static
-../Core/Src/comp_filter.c:135:6:comp_filter_z_update	32	static
-../Core/Src/comp_filter.c:185:6:comp_filter_xy_update	32	static
-../Core/Src/comp_filter.c:253:6:comp_filter_update	48	static

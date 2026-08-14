@@ -1,7 +1,0 @@
-../Devices/vn200/vn200.c:24:13:vn200_validate_header	24	static
-../Devices/vn200/vn200.c:58:17:vn200_read_u16	16	static
-../Devices/vn200/vn200.c:65:14:vn200_read_float	24	static
-../Devices/vn200/vn200.c:81:17:vn200_crc16	24	static
-../Devices/vn200/vn200.c:98:6:vn200_parse	32	static
-../Devices/vn200/vn200.c:146:6:vn200_feed_byte	16	static
-../Devices/vn200/vn200.c:172:6:vn200_get_data	32	static

@@ -1,8 +1,0 @@
-../Devices/dvl/dvl.c:149:17:dvl_read_u16	16	static
-../Devices/dvl/dvl.c:159:14:dvl_read_float	24	static
-../Devices/dvl/dvl.c:183:17:dvl_checksum	24	static
-../Devices/dvl/dvl.c:202:13:dvl_parser_reset	4	static
-../Devices/dvl/dvl.c:214:13:dvl_validate_packet	16	static
-../Devices/dvl/dvl.c:279:13:dvl_parse_packet	88	static
-../Devices/dvl/dvl.c:469:6:dvl_feed_byte	24	static
-../Devices/dvl/dvl.c:566:6:dvl_get_data	24	static

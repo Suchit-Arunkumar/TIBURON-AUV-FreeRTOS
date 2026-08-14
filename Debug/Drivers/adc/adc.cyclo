@@ -1,2 +1,0 @@
-../Drivers/adc/adc.c:3:6:adc_init	1
-../Drivers/adc/adc.c:19:10:adc_read	2
