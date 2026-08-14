@@ -22,11 +22,10 @@
 
 extern volatile uint32_t g_tick;
 extern bool link_ok;
-extern volatile uint8_t telem_pending;
-extern volatile uint8_t log_pending;
 extern QueueHandle_t stateQueue;
 
 void control_loop_get_pwm(uint16_t *out, uint8_t len);
+void control_loop_get_pose(float out[N_DOF]);
 bool control_loop_get_armed(void);
 bool control_loop_get_link(void);
 

@@ -19,6 +19,9 @@
 #include "task.h"
 #include "packet.h"
 #include "comms_task.h"
+#include "logging_task.h"
+#include "sd_logger.h"
+#include "crc_hw.h"
 
 
 // =============================================================================
@@ -35,9 +38,6 @@
 #define CMD_TIMEOUT_MS  500u        // ms before failsafe triggers
 
 #define THRUST_DEADZONE 0.02f
-
-volatile uint8_t telem_pending = 0;
-volatile uint8_t log_pending = 0;
 
 
 // FreeRTOS handle used by TIM7 ISR to notify the control task
@@ -290,6 +290,16 @@ void checkCommandTimeout(void)
 }
 
 
+void control_loop_get_pose(float out[N_DOF])
+{
+    if (out == NULL)
+    {
+        return;
+    }
+
+    memcpy(out, pose, N_DOF * sizeof(float));
+}
+
 void control_loop_get_pwm(uint16_t *out, uint8_t len)
 {
     if (out == NULL)
@@ -321,10 +331,21 @@ bool control_loop_get_link(void)
 // =============================================================================
 // FreeRTOS CONTROL TASK
 // =============================================================================
+/*
+ * P8: log every LOG_DECIMATION-th control tick.
+ *
+ * Control runs at 50 Hz. SD writes end in an unbounded busy-wait
+ * (sd_card.c), so logging every tick would risk overrunning logQueue.
+ * 50 Hz / 10 = 5 Hz log rate.
+ */
+#define LOG_DECIMATION   10U
+
 void control_task(void *argument)
 {
     // This task doesn't use its argument.
 	(void)argument;
+
+	static uint32_t log_tick_count = 0;
 
     // Run forever because FreeRTOS tasks are persistent execution contexts.
 	for (;;)
@@ -362,6 +383,48 @@ void control_task(void *argument)
 	        (1UL << 1),
 	        eSetBits
 	    );
+
+	    /*
+	     * P8: forward a decimated log record to logging_task.
+	     *
+	     * xQueueSend with a 0 timeout — control must never block on
+	     * SPI/SD timing. If logQueue is full (logging pipeline
+	     * stalled), this record is silently dropped rather than
+	     * risk missing a 50 Hz tick.
+	     */
+	    log_tick_count++;
+
+	    if (log_tick_count >= LOG_DECIMATION)
+	    {
+	        log_tick_count = 0;
+
+	        if (logQueue != NULL)
+	        {
+	            LogRecord record;
+	            float pose_now[N_DOF];
+	            uint16_t pwm_now[N_THR];
+
+	            control_loop_get_pose(pose_now);
+	            control_loop_get_pwm(pwm_now, N_THR);
+	            memcpy(record.pwm, pwm_now, sizeof(pwm_now));
+
+	            record.timestamp_ms = (uint32_t)xTaskGetTickCount();
+	            record.depth_m      = pose_now[2];
+	            record.roll_deg     = pose_now[3];
+	            record.pitch_deg    = pose_now[4];
+	            record.yaw_deg      = pose_now[5];
+	            record.armed        = control_loop_get_armed() ? 1 : 0;
+	            record.link_ok      = control_loop_get_link()  ? 1 : 0;
+	            record.crc16        = 0;
+
+	            record.crc16 = (uint16_t)crc_compute(
+	                (const uint8_t *)&record,
+	                sizeof(LogRecord) - sizeof(record.crc16)
+	            );
+
+	            xQueueSend(logQueue, &record, 0);
+	        }
+	    }
 
 	    GPIOA->ODR ^= (1U << 5);
 	}

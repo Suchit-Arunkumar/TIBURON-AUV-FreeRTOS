@@ -42,14 +42,97 @@
 #include "dvl.h"
 #include "filter_task.h"
 #include "bar30_task.h"
+#include "logging_task.h"
+#include "display_task.h"
 
 
 //===========================================================================================================================
 // Dummy task
 //===========================================================================================================================
+
+/*
+ * P9 — task handles needed to call uxTaskGetStackHighWaterMark() on every
+ * task. control/comms/vn200/dvl already had handles for other reasons;
+ * these are new, added specifically for the stack audit below.
+ */
+static TaskHandle_t bar30TaskHandle    = NULL;
+static TaskHandle_t filterTaskHandle   = NULL;
+static TaskHandle_t displayTaskHandle  = NULL;
+static TaskHandle_t loggingTaskHandle  = NULL;
+static TaskHandle_t dummyTaskHandle    = NULL;
+
+/*
+ * P9 stack audit.
+ *
+ * uxTaskGetStackHighWaterMark(handle) returns the SMALLEST amount of free
+ * stack a task has ever had since it started, in words — not the current
+ * free amount. It's a watermark, not a live gauge. A task that used 90% of
+ * its stack once, even briefly during startup, will report that 90% number
+ * forever after, even if it's back to using 10% right now.
+ *
+ * This runs ONCE, several seconds after boot, so every task has gone
+ * through at least a few iterations of its normal worst-case code path
+ * (e.g. control_task's failsafe branch, comms_task's TX branch) before the
+ * numbers are read. Numbers are printed as: allocated words, HWM free
+ * words remaining, and free bytes remaining (HWM * sizeof(StackType_t)).
+ *
+ * This does NOT trim anything automatically. You read the printed output,
+ * decide per-task whether the allocated size in xTaskCreate is wastefully
+ * large, and edit those numbers yourself — that's the actual P9 work.
+ */
+static void print_stack_audit(void)
+{
+    typedef struct
+    {
+        const char    *name;
+        TaskHandle_t   handle;
+        uint16_t       allocated_words;
+    } AuditEntry;
+
+    AuditEntry tasks[] =
+    {
+        { "Control", controlTaskHandle, 256 },
+        { "Comms",   commsTaskHandle,   256 },
+        { "VN200",   vn200TaskHandle,   256 },
+        { "DVL",     dvlTaskHandle,     256 },
+        { "Bar30",   bar30TaskHandle,   256 },
+        { "Filter",  filterTaskHandle,  256 },
+        { "Display", displayTaskHandle, 256 },
+        { "Logging", loggingTaskHandle, 256 },
+        { "Dummy",   dummyTaskHandle,   128 },
+    };
+
+    printf("\r\n=== P9 STACK AUDIT (words free = min-ever-seen, not current) ===\r\n");
+
+    for (uint8_t i = 0; i < sizeof(tasks) / sizeof(tasks[0]); i++)
+    {
+        if (tasks[i].handle == NULL)
+        {
+            printf("%-8s NULL HANDLE - not tracked\r\n", tasks[i].name);
+            continue;
+        }
+
+        UBaseType_t hwm_words = uxTaskGetStackHighWaterMark(tasks[i].handle);
+
+        printf(
+            "%-8s alloc=%4u words  hwm_free=%4lu words  (%4lu bytes)\r\n",
+            tasks[i].name,
+            tasks[i].allocated_words,
+            (unsigned long)hwm_words,
+            (unsigned long)(hwm_words * sizeof(StackType_t))
+        );
+    }
+
+    printf("=== END AUDIT ===\r\n\r\n");
+}
+
 static void dummy_task(void *argument)
 {
     (void)argument;
+
+    /* Let every task run through a few normal cycles before reading HWM. */
+    vTaskDelay(pdMS_TO_TICKS(5000));
+    print_stack_audit();
 
     while (1)
     {
@@ -324,13 +407,35 @@ int main(void)
         );
 
     /*
+     * Phase 8 — control_task -> logging_task.
+     * Depth 4: absorbs one slow SD write cycle without blocking
+     * control_task's non-blocking send.
+     */
+    logQueue =
+        xQueueCreate(
+            4,
+            sizeof(LogRecord)
+        );
+
+    /*
+     * Phase 8 — logging_task -> display_task (SPI bus owner).
+     */
+    spiRequestQueue =
+        xQueueCreate(
+            4,
+            sizeof(SpiRequest)
+        );
+
+    /*
      * Verify queue creation.
      */
     if (commandQueue == NULL ||
         dvlQueue == NULL ||
         vn200Queue == NULL ||
         bar30Queue == NULL ||
-        stateQueue == NULL)
+        stateQueue == NULL ||
+        logQueue == NULL ||
+        spiRequestQueue == NULL)
     {
         printf(
             "QUEUE CREATE FAIL\r\n"
@@ -414,7 +519,7 @@ int main(void)
         256,
         NULL,
         4,
-        NULL
+        &bar30TaskHandle
     );
 
 
@@ -423,10 +528,13 @@ int main(void)
      *
      * Priority = 6
      *
-     * Control = 7
-     * Filter  = 6
-     * Comms   = 5
-     * Sensors = 4
+     * Control  = 7
+     * Filter   = 6
+     * Comms    = 5
+     * Sensors  = 4
+     * Display  = 3
+     * Logging  = 2
+     * Dummy    = 1
      */
     xTaskCreate(
         filter_task,
@@ -434,8 +542,37 @@ int main(void)
         256,
         NULL,
         6,
-        NULL
-    );/*
+        &filterTaskHandle
+    );
+
+    /*
+     * Phase 8 — Create Display task.
+     *
+     * Sole owner of SPI1 (OLED + SD). Priority = 3.
+     */
+    xTaskCreate(
+        display_task,
+        "Display Task",
+        256,
+        NULL,
+        3,
+        &displayTaskHandle
+    );
+
+    /*
+     * Phase 8 — Create Logging task.
+     *
+     * Lowest of the "real" tasks — never touches SPI directly.
+     * Priority = 2.
+     */
+    xTaskCreate(
+        logging_task,
+        "Logging Task",
+        256,
+        NULL,
+        2,
+        &loggingTaskHandle
+    );
 
     /*
      * 25. Create dummy task.
@@ -448,7 +585,7 @@ int main(void)
         128,
         NULL,
         1,
-        NULL
+        &dummyTaskHandle
     );
 
 

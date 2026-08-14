@@ -9,7 +9,8 @@
 ../Core/Src/control_loop.c:249:6:applyPWM	8
 ../Core/Src/control_loop.c:273:6:enterFailsafe	2
 ../Core/Src/control_loop.c:285:6:checkCommandTimeout	3
-../Core/Src/control_loop.c:293:6:control_loop_get_pwm	4
-../Core/Src/control_loop.c:311:6:control_loop_get_armed	1
-../Core/Src/control_loop.c:316:6:control_loop_get_link	1
-../Core/Src/control_loop.c:324:6:control_task	3
+../Core/Src/control_loop.c:293:6:control_loop_get_pose	2
+../Core/Src/control_loop.c:303:6:control_loop_get_pwm	4
+../Core/Src/control_loop.c:321:6:control_loop_get_armed	1
+../Core/Src/control_loop.c:326:6:control_loop_get_link	1
+../Core/Src/control_loop.c:343:6:control_task	5
