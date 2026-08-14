@@ -188,9 +188,6 @@ void TIM7_IRQHandler(void)
     // Clear TIM7 update interrupt flag
     TIM7->SR &= ~TIM_SR_UIF;
 
-    // Set log_pending flag
-    log_pending = 1;
-
     // Tell FreeRTOS whether a higher-priority task was woken
     BaseType_t xHigherPriorityTaskWoken = pdFALSE;
 
