@@ -115,8 +115,8 @@
 								<listOptionValue builtIn="false" value="../Drivers/i2c"/>
 								<listOptionValue builtIn="false" value="../Devices/bar30"/>
 								<listOptionValue builtIn="false" value="../Drivers/iwdg"/>
-								<listOptionValue builtIn="false" value="../../Devices/vn200"/>
-								<listOptionValue builtIn="false" value="../../Devices/dvl"/>
+								<listOptionValue builtIn="false" value="&quot;${ProjDirPath}/Devices/vn200&quot;"/>
+								<listOptionValue builtIn="false" value="&quot;${ProjDirPath}/Devices/dvl&quot;"/>
 							</option>
 							<inputType id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c.1671339068" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c"/>
 						</tool>
@@ -130,7 +130,9 @@
 					<sourceEntries>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Core"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Devices/bar30"/>
+						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Devices/dvl"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Devices/oled"/>
+						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Devices/vn200"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Drivers"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Middlewares/FreeRTOS/Source"/>
 						<entry excluding="sd_card" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Protocol"/>
@@ -211,7 +213,9 @@
 					<sourceEntries>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Core"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Devices/bar30"/>
+						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Devices/dvl"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Devices/oled"/>
+						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Devices/vn200"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Drivers"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Middlewares/FreeRTOS/Source"/>
 						<entry excluding="sd_card" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Protocol"/>
