@@ -21,8 +21,6 @@
 
 #include "control_loop.h"
 
-#include "adc.h"
-#include "dac.h"
 
 #include "struct.h"
 #include "packet.h"
@@ -34,6 +32,8 @@
 #include "bar30.h"
 
 #include "iwdg.h"
+
+#include "fault_latch.h"
 
 #include "comms_task.h"
 #include "vn200_task.h"
@@ -148,26 +148,25 @@ static void dummy_task(void *argument)
 //===========================================================================================================================
 // FreeRTOS stack overflow hook
 //===========================================================================================================================
+/*
+ * Both hooks now latch into .noinit and halt, instead of blinking a LED
+ * that told you nothing about which task died or why. The task name goes
+ * into the latch detail field, so a warm reset prints it.
+ */
 void vApplicationStackOverflowHook(
     TaskHandle_t xTask,
     char *pcTaskName
 )
 {
     (void)xTask;
-    (void)pcTaskName;
 
-    __disable_irq();
-
-    while (1)
-    {
-        GPIOA->ODR ^= (1U << 5);
-
-        for (volatile uint32_t i = 0;
-             i < 500000;
-             i++)
-        {
-        }
-    }
+    fault_latch_fail(
+        FAULT_STACK_OVERFLOW,
+        __FILE__,
+        __LINE__,
+        (uint32_t)__builtin_return_address(0),
+        (const char *)pcTaskName
+    );
 }
 
 
@@ -176,17 +175,57 @@ void vApplicationStackOverflowHook(
 //===========================================================================================================================
 void vApplicationMallocFailedHook(void)
 {
-    __disable_irq();
+    fault_latch_fail(
+        FAULT_MALLOC_FAILED,
+        __FILE__,
+        __LINE__,
+        (uint32_t)__builtin_return_address(0),
+        "pvPortMalloc returned NULL"
+    );
+}
 
-    while (1)
+
+//===========================================================================================================================
+// Checked task creation
+//===========================================================================================================================
+/*
+ * xTaskCreate returns errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY when the
+ * heap is exhausted. Every call used to discard that, so a heap that
+ * ran out midway through init produced a board that started the
+ * scheduler with tasks silently missing — the control loop simply
+ * never running, with nothing to indicate why.
+ *
+ * Latch the task name and stop. This runs before the scheduler, so a
+ * halt here is safe.
+ */
+static void create_task_checked(
+    TaskFunction_t fn,
+    const char *name,
+    uint16_t stack_words,
+    UBaseType_t priority,
+    TaskHandle_t *handle
+)
+{
+    BaseType_t ok = xTaskCreate(
+        fn,
+        name,
+        stack_words,
+        NULL,
+        priority,
+        handle
+    );
+
+    if (ok != pdPASS)
     {
-        GPIOA->ODR ^= (1U << 5);
+        printf("TASK CREATE FAIL: %s\r\n", name);
 
-        for (volatile uint32_t i = 0;
-             i < 500000;
-             i++)
-        {
-        }
+        fault_latch_fail(
+            FAULT_INIT_FAILED,
+            __FILE__,
+            __LINE__,
+            (uint32_t)__builtin_return_address(0),
+            name
+        );
     }
 }
 
@@ -204,7 +243,10 @@ int main(void)
 
 
     /*
-     * 2. Initialize GPIO.
+     * 2. Initialize the LD2 heartbeat LED on PA5.
+     *
+     * PA5 is genuinely a GPIO again — the SPI bus moved to SPI2 on
+     * PB13/14/15, so nothing steals this pin later in init any more.
      */
     gpio_init(
         GPIOA,
@@ -218,6 +260,17 @@ int main(void)
     uart2_init();
 
     printf("BOOT OK\r\n");
+    printf("CLK: %s\r\n", system_clock_status_str(g_clock_status));
+
+
+    /*
+     * 3b. Report and clear any fault latched by the previous run.
+     *
+     * Deliberately placed here: the VCP is up so this is printable, and
+     * nothing that could fault again has run yet. Prints nothing when no
+     * fault is latched.
+     */
+    fault_latch_report();
 
 
     /*
@@ -227,21 +280,15 @@ int main(void)
 
 
     /*
-     * 5. Initialize ADC.
+     * 5. Initialize SPI2 (OLED + SD card).
+     *
+     * ADC and DAC init used to sit here. Both were dead code — nothing
+     * ever called adc_read() or dac_write() — and both claimed pins the
+     * final map assigns elsewhere: PA0 is now UART4_TX, and PA4 is
+     * reserved for a future ADC depth input and deliberately left
+     * unconfigured. Drivers deleted.
      */
-    adc_init();
-
-
-    /*
-     * 6. Initialize DAC.
-     */
-    dac_init();
-
-
-    /*
-     * 7. Initialize SPI1.
-     */
-    spi1_init();
+    spi2_init();
 
 
     /*
@@ -324,11 +371,13 @@ int main(void)
 
 
     /*
-     * 15. Initialize thruster PWM outputs.
+     * 15. Initialize all eight thruster PWM outputs.
      *
-     * Outputs start at neutral.
+     * TIM3 CH1-4 + TIM8 CH1-4, every channel written to 1500 us before
+     * any output stage is enabled, counters running. The ESCs arm during
+     * the remainder of boot.
      */
-    timer3_pwm_init();
+    pwm_init();
 
 
     /*
@@ -352,9 +401,25 @@ int main(void)
 
 
     /*
-     * 19. Start 50 Hz control-loop timer.
+     * 19. Start the independent watchdog.
+     *
+     * Compiles to nothing unless ENABLE_IWDG is defined in iwdg.h, which
+     * it is not by default. Started last among the peripherals so the
+     * slower init steps above cannot trip it, and refreshed only by
+     * control_task.
      */
-    tim7_init();
+    iwdg_init();
+
+
+    /*
+     * B6: tim7_init() used to sit here.
+     *
+     * It has moved into control_task's first iteration. TIM7's ISR
+     * notifies controlTaskHandle and calls portYIELD_FROM_ISR, and
+     * neither is safe until the scheduler is running and that handle is
+     * populated — starting the timer here left a window where the 50 Hz
+     * interrupt could fire before either was true.
+     */
 
 
     /*
@@ -428,6 +493,10 @@ int main(void)
 
     /*
      * Verify queue creation.
+     *
+     * A NULL queue here would otherwise surface much later as a
+     * configASSERT deep inside the kernel on the first send. Latch the
+     * real cause and stop before the scheduler ever starts.
      */
     if (commandQueue == NULL ||
         dvlQueue == NULL ||
@@ -437,156 +506,46 @@ int main(void)
         logQueue == NULL ||
         spiRequestQueue == NULL)
     {
-        printf(
-            "QUEUE CREATE FAIL\r\n"
+        printf("QUEUE CREATE FAIL\r\n");
+
+        fault_latch_fail(
+            FAULT_INIT_FAILED,
+            __FILE__,
+            __LINE__,
+            (uint32_t)__builtin_return_address(0),
+            "xQueueCreate returned NULL"
         );
-
-        __disable_irq();
-
-        while (1)
-        {
-        }
     }
 
 
     /*
-     * 21. Create Control task.
+     * 21. Create the application tasks.
      *
-     * Priority = 7
+     * Priority scheme (configMAX_PRIORITIES = 8, so 7 is the top):
+     *
+     *   7  Control   50 Hz deadline; nothing may delay it
+     *   6  Filter    must have a fresh estimate ready before Control wakes
+     *   5  Comms     command ingest and telemetry egress
+     *   4  VN200 / DVL / Bar30   sensor drivers, equal and interchangeable
+     *   3  Display   owns SPI2
+     *   2  Logging   feeds Display; never touches SPI itself
+     *   1  Dummy     heartbeat and the one-shot stack audit
+     *   0  IDLE      kernel
+     *
+     * Priority 2 is no longer shared with anything: configUSE_TIMERS is
+     * now 0, so the timer service daemon that used to sit there is gone.
+     *
+     * Every creation is checked — see create_task_checked above.
      */
-    xTaskCreate(
-        control_task,
-        "Control Task",
-        256,
-        NULL,
-        7,
-        &controlTaskHandle
-    );
-
-
-    /*
-     * 22. Create Communications task.
-     *
-     * Priority = 5
-     */
-    xTaskCreate(
-        comms_task,
-        "Comms Task",
-        256,
-        NULL,
-        5,
-        &commsTaskHandle
-    );
-
-
-    /*
-     * 23. Create VN-200 task.
-     *
-     * Priority = 4
-     */
-    xTaskCreate(
-        vn200_task,
-        "VN200 Task",
-        256,
-        NULL,
-        4,
-        &vn200TaskHandle
-    );
-
-
-    /*
-     * 24. Create DVL task.
-     *
-     * Priority = 4
-     */
-    xTaskCreate(
-        dvl_task,
-        "DVL Task",
-        256,
-        NULL,
-        4,
-        &dvlTaskHandle
-    );
-
-    /*
-     * Create Bar30 task.
-     *
-     * Priority = 4
-     */
-    xTaskCreate(
-        bar30_task,
-        "Bar30 Task",
-        256,
-        NULL,
-        4,
-        &bar30TaskHandle
-    );
-
-
-    /*
-     * Create Phase 6 filter task.
-     *
-     * Priority = 6
-     *
-     * Control  = 7
-     * Filter   = 6
-     * Comms    = 5
-     * Sensors  = 4
-     * Display  = 3
-     * Logging  = 2
-     * Dummy    = 1
-     */
-    xTaskCreate(
-        filter_task,
-        "Filter Task",
-        256,
-        NULL,
-        6,
-        &filterTaskHandle
-    );
-
-    /*
-     * Phase 8 — Create Display task.
-     *
-     * Sole owner of SPI1 (OLED + SD). Priority = 3.
-     */
-    xTaskCreate(
-        display_task,
-        "Display Task",
-        256,
-        NULL,
-        3,
-        &displayTaskHandle
-    );
-
-    /*
-     * Phase 8 — Create Logging task.
-     *
-     * Lowest of the "real" tasks — never touches SPI directly.
-     * Priority = 2.
-     */
-    xTaskCreate(
-        logging_task,
-        "Logging Task",
-        256,
-        NULL,
-        2,
-        &loggingTaskHandle
-    );
-
-    /*
-     * 25. Create dummy task.
-     *
-     * Priority = 1
-     */
-    xTaskCreate(
-        dummy_task,
-        "Dummy",
-        128,
-        NULL,
-        1,
-        &dummyTaskHandle
-    );
+    create_task_checked(control_task, "Control Task", 256, 7, &controlTaskHandle);
+    create_task_checked(filter_task,  "Filter Task",  256, 6, &filterTaskHandle);
+    create_task_checked(comms_task,   "Comms Task",   256, 5, &commsTaskHandle);
+    create_task_checked(vn200_task,   "VN200 Task",   256, 4, &vn200TaskHandle);
+    create_task_checked(dvl_task,     "DVL Task",     256, 4, &dvlTaskHandle);
+    create_task_checked(bar30_task,   "Bar30 Task",   256, 4, &bar30TaskHandle);
+    create_task_checked(display_task, "Display Task", 256, 3, &displayTaskHandle);
+    create_task_checked(logging_task, "Logging Task", 256, 2, &loggingTaskHandle);
+    create_task_checked(dummy_task,   "Dummy",        128, 1, &dummyTaskHandle);
 
 
     /*

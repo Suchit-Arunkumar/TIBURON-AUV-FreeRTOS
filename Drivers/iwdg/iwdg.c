@@ -1,23 +1,39 @@
 #include "iwdg.h"
 
+/*
+ * Both functions compile to nothing unless ENABLE_IWDG is defined, so
+ * call sites do not need their own #ifdef and the control loop reads the
+ * same either way.
+ */
+
 void iwdg_init(void)
 {
-    // 1. Unlock PR and RLR by writing 0x5555 to KR
-	IWDG->KR = (0x5555 << 0);
+#ifdef ENABLE_IWDG
+    /* 1. Unlock PR and RLR. */
+    IWDG->KR = 0x5555U;
 
-    // 2. Set prescaler in PR (divide LSI by 32 → 1kHz tick)
-    IWDG->PR = (3 << 0);
+    /* 2. Prescaler: LSI / 64 -> ~500 Hz. */
+    while (IWDG->SR & IWDG_SR_PVU)
+    {
+    }
+    IWDG->PR = IWDG_PR_DIV64;
 
-	// 3. Set RLR reload value for ~500ms timeout
-    IWDG->RLR = (500 << 0);
+    /* 3. Reload value: 500 counts at ~500 Hz -> ~1 s. */
+    while (IWDG->SR & IWDG_SR_RVU)
+    {
+    }
+    IWDG->RLR = IWDG_RELOAD_1S;
 
-	// 4. Start IWDG by writing 0xCCCC to KR
-    IWDG->KR = (0xCCCC << 0);
-
+    /* 4. Load the counter, then start. Once started the IWDG cannot be
+     *    stopped by software - only a reset clears it. */
+    IWDG->KR = 0xAAAAU;
+    IWDG->KR = 0xCCCCU;
+#endif
 }
 
 void iwdg_kick(void)
 {
-    // 1. Write 0xAAAA to KR to reload counter
-	IWDG->KR = (0xAAAA << 0);
+#ifdef ENABLE_IWDG
+    IWDG->KR = 0xAAAAU;
+#endif
 }

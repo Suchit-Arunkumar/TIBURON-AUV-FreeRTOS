@@ -56,37 +56,41 @@ static void uart4_rx_store(
 void uart4_init(void)
 {
     /*
-     * GPIOC clock.
+     * GPIOA clock.
+     *
+     * DVL moved from PC10/PC11 to PA0/PA1 so USART3 can take PC10/PC11
+     * for the VN-200. PA0 previously carried the unused ADC input, which
+     * has been removed along with the DAC.
      */
-    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOCEN;
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
 
 
     /*
-     * PC10 = UART4_TX.
+     * PA0 = UART4_TX (AF8).
      */
-    GPIOC->MODER &= ~(3U << (2U * 10U));
-    GPIOC->MODER |=  (2U << (2U * 10U));
+    GPIOA->MODER &= ~(3U << (2U * 0U));
+    GPIOA->MODER |=  (2U << (2U * 0U));
 
 
     /*
-     * PC11 = UART4_RX.
+     * PA1 = UART4_RX (AF8).
      */
-    GPIOC->MODER &= ~(3U << (2U * 11U));
-    GPIOC->MODER |=  (2U << (2U * 11U));
+    GPIOA->MODER &= ~(3U << (2U * 1U));
+    GPIOA->MODER |=  (2U << (2U * 1U));
 
 
     /*
-     * PC10 = AF8.
+     * PA0 = AF8.
      */
-    GPIOC->AFR[1] &= ~(0xFU << 8U);
-    GPIOC->AFR[1] |=  (8U << 8U);
+    GPIOA->AFR[0] &= ~(0xFU << 0U);
+    GPIOA->AFR[0] |=  (8U << 0U);
 
 
     /*
-     * PC11 = AF8.
+     * PA1 = AF8.
      */
-    GPIOC->AFR[1] &= ~(0xFU << 12U);
-    GPIOC->AFR[1] |=  (8U << 12U);
+    GPIOA->AFR[0] &= ~(0xFU << 4U);
+    GPIOA->AFR[0] |=  (8U << 4U);
 
 
     /*

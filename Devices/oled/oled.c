@@ -3,9 +3,12 @@
 #include "stm32f446xx.h"
 #include <string.h>
 
-// DC pin  = PA3 (HIGH = data, LOW = command)
-// RES pin = PA2 (active low reset)
-// CS pin  = PA4 (managed in spi.c)
+// DC pin  = PC0 (HIGH = data, LOW = command)
+// RES pin = PC1 (active low reset)
+// CS pin  = PC5 (managed in spi.c)
+//
+// Moved off PA2/PA3, which collided with USART2 (the ST-LINK VCP) and
+// silently killed every printf once oled_init() ran. Audit finding B3.
 
 static uint8_t framebuf[OLED_WIDTH * (OLED_HEIGHT / 8)];
 
@@ -109,25 +112,29 @@ static const uint8_t font5x7[][5] = {
 
 static void dc_res_init(void)
 {
-    // 1. configure PA2 (RES) as GPIO output in MODER
-    GPIOA->MODER &= ~(3U << (2*2));
-    GPIOA->MODER |=  (1U << (2*2));
+    // 0. enable GPIOC clock (spi2_init also does this; both are idempotent)
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOCEN;
 
-    // 2. configure PA3 (DC) as GPIO output in MODER
-    GPIOA->MODER &= ~(3U << (2*3));
-    GPIOA->MODER |=  (1U << (2*3));
+    // 1. drive RES and DC high before switching them to outputs, so the
+    //    panel never sees a reset pulse from the mode change itself
+    GPIOC->BSRR = (1U << 1) | (1U << 0);
 
-    // 3. set RES high using BSRR
-    GPIOA->BSRR = (1U << 2);
+    // 2. configure PC1 (RES) as GPIO output in MODER
+    GPIOC->MODER &= ~(3U << (2*1));
+    GPIOC->MODER |=  (1U << (2*1));
 
-    // 4. set DC high using BSRR
-    GPIOA->BSRR = (1U << 3);
+    // 3. configure PC0 (DC) as GPIO output in MODER
+    GPIOC->MODER &= ~(3U << (2*0));
+    GPIOC->MODER |=  (1U << (2*0));
+
+    // 4. re-assert both high now that they are genuinely outputs
+    GPIOC->BSRR = (1U << 1) | (1U << 0);
 }
 
 static void write_cmd(uint8_t cmd)
 {
     // 1. pull DC low (command mode)
-    GPIOA->BSRR = (1U << (3 + 16));
+    GPIOC->BSRR = (1U << (0 + 16));
 
     // 2. select OLED CS
     spi_select_oled();
@@ -139,10 +146,11 @@ static void write_cmd(uint8_t cmd)
     spi_deselect_oled();
 }
 
+__attribute__((unused))
 static void write_data(uint8_t data)
 {
     // 1. pull DC high (data mode)
-    GPIOA->BSRR = (1U << 3);
+    GPIOC->BSRR = (1U << 0);
 
     // 2. select OLED CS
     spi_select_oled();
@@ -165,9 +173,9 @@ void oled_init(void)
     dc_res_init();
 
     // 2. hardware reset: pull RES low, delay ~10ms, pull RES high, delay ~10ms
-    GPIOA->BSRR = (1U << (2 + 16));
+    GPIOC->BSRR = (1U << (1 + 16));
     delay_ms_simple(10);
-    GPIOA->BSRR = (1U << 2);
+    GPIOC->BSRR = (1U << 1);
     delay_ms_simple(10);
 
     // 3. send init command sequence
@@ -210,7 +218,7 @@ void oled_update(void)
     write_cmd(0x22); write_cmd(0); write_cmd(7);
 
     // 3. pull DC high (data mode)
-    GPIOA->BSRR = (1U << 3);
+    GPIOC->BSRR = (1U << 0);
 
     // 4. select OLED CS
     spi_select_oled();
