@@ -1,9 +1,69 @@
 #include "sd_card.h"
 #include "spi.h"
 
+#include <stddef.h>
+
+/*
+ * Post-write busy timeout.
+ *
+ * The SD Physical Layer Simplified Specification sets the host timeout
+ * for a single-block write at 250 ms (for SDSC it is derived from
+ * TAAC/NSAC/R2W_FACTOR in the CSD but capped at the same figure). Typical
+ * commit on a generic Class 10 card is 2-3 ms; the worst case is reached
+ * when the card runs internal wear-levelling mid-write.
+ *
+ * The previous code capped the busy poll at 100000 loop iterations. At
+ * SPI_BR_SD_DATA that is roughly 110 ms of real time - LESS THAN HALF the
+ * spec allowance - so a card that was merely slow got reported as failed.
+ *
+ * This is expressed in polls derived from the byte time so the meaning
+ * survives a change of SPI clock, rather than as a bare loop count.
+ */
+#define SD_WRITE_TIMEOUT_MS        250U
+#define SD_READ_TIMEOUT_MS         100U
+
+/*
+ * One busy poll clocks one byte: 8/f_SCK plus ~0.4 us of polled driver
+ * overhead. At SPI_BR_SD_DATA (5.625 MHz) that is 1.422 + 0.40 = 1.822 us.
+ *
+ * Expressed in ns and divided out, so the timeout means the wall-clock
+ * duration it claims to. Using a rounded 1 us instead would stretch a
+ * 250 ms budget to 455 ms of real bus hold on a dead card - which is the
+ * exact number the Phase 8 worst-case analysis quotes, so it has to be
+ * right rather than merely conservative.
+ *
+ * If SPI_BR_SD_DATA is raised to SPI_BR_DIV4, update this to 1111.
+ */
+#define SD_POLL_NS                 1822U
+#define SD_TIMEOUT_POLLS(ms)       (((ms) * 1000000UL) / SD_POLL_NS)
+
+static int (*sd_card_detect)(void) = NULL;
+
+void sd_set_card_detect(int (*present_fn)(void))
+{
+    sd_card_detect = present_fn;
+}
+
+const char *sd_status_str(SD_Status s)
+{
+    switch (s)
+    {
+        case SD_OK:                 return "OK";
+        case SD_ERR_NO_CARD:        return "NO CARD (CMD0 no response)";
+        case SD_ERR_CMD8:           return "CMD8 check pattern mismatch";
+        case SD_ERR_ACMD41_TIMEOUT: return "ACMD41 timeout (card never left idle)";
+        case SD_ERR_OCR_VOLTAGE:    return "OCR: 3.3V window unsupported";
+        case SD_ERR_IO:             return "block I/O error";
+        case SD_ERR_CD_ABSENT:      return "card-detect: slot empty";
+        default:                    return "unknown";
+    }
+}
+
 static void sd_delay(void)
 {
-    for (volatile uint32_t i = 0; i < 8000; i++);
+    for (volatile uint32_t i = 0; i < 8000; i++)
+    {
+    }
 }
 
 static uint8_t sd_send_cmd(uint8_t cmd, uint32_t arg, uint8_t crc)
@@ -31,6 +91,20 @@ static uint8_t sd_send_cmd(uint8_t cmd, uint32_t arg, uint8_t crc)
 
 SD_Status sd_init(void)
 {
+    /* Optional mechanical card detect, if one was ever registered. */
+    if ((sd_card_detect != NULL) && (sd_card_detect() == 0))
+    {
+        return SD_ERR_CD_ABSENT;
+    }
+
+    /*
+     * B7: the whole identification sequence must run inside the SD
+     * specification's 100-400 kHz window. SPI_BR_SD_INIT is 351.6 kHz.
+     * Previously this all ran at full speed, which some cards tolerate
+     * and others silently refuse.
+     */
+    spi_set_baud(SPI_BR_SD_INIT);
+
     // 1. power stabilisation delay
     sd_delay();
 
@@ -44,23 +118,29 @@ SD_Status sd_init(void)
     spi_deselect_sd();
     spi_transmit(0xFF);
 
-    if (r1 != 0x01) return SD_FAIL;
+    if (r1 != 0x01) return SD_ERR_NO_CARD;
 
     // 4. CMD8 — interface condition, check for v2 card
     spi_select_sd();
     r1 = sd_send_cmd(8, 0x000001AA, 0x87);
     uint8_t r7[4];
     for (uint8_t i = 0; i < 4; i++) r7[i] = spi_receive();
-
-    /*
-     * These four bytes must be clocked out whether or not we inspect
-     * them, otherwise the next command starts mid-response. Validating
-     * the 0x01AA echo to tell a v1 card from a v2 card belongs with the
-     * rest of the SD rework in Phase 8.
-     */
-    (void)r7;
     spi_deselect_sd();
     spi_transmit(0xFF);
+
+    /*
+     * R7 must echo the voltage nibble and the 0xAA check pattern in its
+     * last two bytes. These four bytes have to be clocked out either way
+     * to keep the bus in sync; now the answer is actually inspected.
+     */
+    if ((r1 & 0x04) == 0)
+    {
+        /* Card understood CMD8, so it is v2.0+. Validate the echo. */
+        if (((r7[2] & 0x0F) != 0x01) || (r7[3] != 0xAA))
+        {
+            return SD_ERR_CMD8;
+        }
+    }
 
     // 5. ACMD41 loop — wait for card to finish init
     uint32_t timeout = 1000;
@@ -80,7 +160,7 @@ SD_Status sd_init(void)
         sd_delay();
     } while ((r1 & 0x01) && --timeout);
 
-    if (timeout == 0) return SD_FAIL;
+    if (timeout == 0) return SD_ERR_ACMD41_TIMEOUT;
 
     // 6. CMD58 — read OCR, verify 3.3V support
     spi_select_sd();
@@ -90,8 +170,15 @@ SD_Status sd_init(void)
     spi_deselect_sd();
     spi_transmit(0xFF);
 
-    if (r1 != 0x00) return SD_FAIL;
-    if (!(ocr[1] & 0x30)) return SD_FAIL;
+    if (r1 != 0x00) return SD_ERR_IO;
+    if (!(ocr[1] & 0x30)) return SD_ERR_OCR_VOLTAGE;
+
+    /*
+     * Identification is done. Move to the data rate for everything that
+     * follows. The bus owner re-asserts this per request type, but
+     * leaving it correct here keeps sd_init self-contained.
+     */
+    spi_set_baud(SPI_BR_SD_DATA);
 
     return SD_OK;
 }
@@ -113,7 +200,7 @@ SD_Status sd_write_block(uint32_t block_addr, const uint8_t *data)
     {
         spi_deselect_sd();
         spi_transmit(0xFF);
-        return SD_FAIL;
+        return SD_ERR_IO;
     }
 
     // One byte gap before data token
@@ -139,11 +226,15 @@ SD_Status sd_write_block(uint32_t block_addr, const uint8_t *data)
     {
         spi_deselect_sd();
         spi_transmit(0xFF);
-        return SD_FAIL;
+        return SD_ERR_IO;
     }
 
-    // Wait while card is busy
-    timeout = 100000;
+    /*
+     * Wait out the card's internal program cycle. Now sized to the
+     * specification's 250 ms allowance instead of the previous ~110 ms,
+     * which failed slow-but-healthy cards.
+     */
+    timeout = SD_TIMEOUT_POLLS(SD_WRITE_TIMEOUT_MS);
 
     while (--timeout)
     {
@@ -155,7 +246,7 @@ SD_Status sd_write_block(uint32_t block_addr, const uint8_t *data)
     spi_transmit(0xFF);
 
     if (timeout == 0)
-        return SD_FAIL;
+        return SD_ERR_IO;
 
     return SD_OK;
 }
@@ -177,11 +268,11 @@ SD_Status sd_read_block(uint32_t block_addr, uint8_t *buf)
     {
         spi_deselect_sd();
         spi_transmit(0xFF);
-        return SD_FAIL;
+        return SD_ERR_IO;
     }
 
     // 2. Wait for start token 0xFE
-    timeout = 100000;
+    timeout = SD_TIMEOUT_POLLS(SD_READ_TIMEOUT_MS);
 
     while (--timeout)
     {
@@ -193,7 +284,7 @@ SD_Status sd_read_block(uint32_t block_addr, uint8_t *buf)
     {
         spi_deselect_sd();
         spi_transmit(0xFF);
-        return SD_FAIL;
+        return SD_ERR_IO;
     }
 
     // 3. Read 512-byte sector
@@ -206,10 +297,8 @@ SD_Status sd_read_block(uint32_t block_addr, uint8_t *buf)
     spi_receive();
     spi_receive();
 
-    // 5. CS high + extra clocks
     spi_deselect_sd();
     spi_transmit(0xFF);
 
-    // 6. Success
     return SD_OK;
 }

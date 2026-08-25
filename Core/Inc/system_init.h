@@ -58,4 +58,18 @@ extern volatile ClockStatus g_clock_status;
 ClockStatus  system_clock_init(void);
 const char  *system_clock_status_str(ClockStatus s);
 
+/*
+ * 1 when the clock never reached 180 MHz. Callers must not start the
+ * scheduler in that case - configCPU_CLOCK_HZ is a 180 MHz literal, and
+ * every UART divisor assumes 45/90 MHz buses.
+ */
+int          clock_status_is_fatal(ClockStatus s);
+
+/*
+ * Blink the status code on LD2 forever. Never returns. Called when the
+ * clock is fatally wrong, where the console cannot be trusted to report
+ * anything. Configures PA5 itself; safe before any driver init.
+ */
+void         clock_fault_blink_forever(ClockStatus s) __attribute__((noreturn));
+
 #endif /* SYSTEM_INIT_H */

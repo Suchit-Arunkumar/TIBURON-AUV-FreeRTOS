@@ -43,7 +43,8 @@
 #include "filter_task.h"
 #include "bar30_task.h"
 #include "logging_task.h"
-#include "display_task.h"
+#include "spi_owner_task.h"
+#include "console.h"
 
 
 //===========================================================================================================================
@@ -57,7 +58,7 @@
  */
 static TaskHandle_t bar30TaskHandle    = NULL;
 static TaskHandle_t filterTaskHandle   = NULL;
-static TaskHandle_t displayTaskHandle  = NULL;
+static TaskHandle_t spiOwnerTaskHandle = NULL;
 static TaskHandle_t loggingTaskHandle  = NULL;
 static TaskHandle_t dummyTaskHandle    = NULL;
 
@@ -97,25 +98,25 @@ static void print_stack_audit(void)
         { "DVL",     dvlTaskHandle,     256 },
         { "Bar30",   bar30TaskHandle,   256 },
         { "Filter",  filterTaskHandle,  256 },
-        { "Display", displayTaskHandle, 256 },
+        { "SPIOwner",spiOwnerTaskHandle, 256 },
         { "Logging", loggingTaskHandle, 256 },
         { "Dummy",   dummyTaskHandle,   128 },
     };
 
-    printf("\r\n=== P9 STACK AUDIT (words free = min-ever-seen, not current) ===\r\n");
+    console_printf("=== P9 STACK AUDIT (free words = min ever seen) ===");
 
     for (uint8_t i = 0; i < sizeof(tasks) / sizeof(tasks[0]); i++)
     {
         if (tasks[i].handle == NULL)
         {
-            printf("%-8s NULL HANDLE - not tracked\r\n", tasks[i].name);
+            console_printf("%-8s NULL HANDLE - not tracked", tasks[i].name);
             continue;
         }
 
         UBaseType_t hwm_words = uxTaskGetStackHighWaterMark(tasks[i].handle);
 
-        printf(
-            "%-8s alloc=%4u words  hwm_free=%4lu words  (%4lu bytes)\r\n",
+        console_printf(
+            "%-8s alloc=%4u w  hwm_free=%4lu w (%4lu B)",
             tasks[i].name,
             tasks[i].allocated_words,
             (unsigned long)hwm_words,
@@ -123,24 +124,97 @@ static void print_stack_audit(void)
         );
     }
 
-    printf("=== END AUDIT ===\r\n\r\n");
+    console_printf("heap free=%u B  log drops=%lu  console drops=%lu",
+                   (unsigned)xPortGetFreeHeapSize(),
+                   (unsigned long)control_log_drops(),
+                   (unsigned long)console_dropped());
+    console_printf("=== END AUDIT ===");
 }
 
 static void dummy_task(void *argument)
 {
     (void)argument;
 
+    /*
+     * THE SINGLE STDIO OWNER.
+     *
+     * configUSE_NEWLIB_REENTRANT is 0, so all nine tasks share one
+     * struct _reent and one stdout FILE. Rather than pay ~96 bytes of
+     * _reent per TCB to make printf reentrant, every other task calls
+     * console_printf(), which formats into its own stack and posts the
+     * bytes to consoleQueue. This task is the only one that performs
+     * output, and it does so with uart2_write_str() - so after the
+     * scheduler starts, stdout is never touched at all.
+     *
+     * The queue receive timeout doubles as the heartbeat tick, so no
+     * second wake source is needed. Heartbeat phase is tracked against
+     * xTaskGetTickCount rather than the timeout firing, so console
+     * traffic cannot skew the blink rate.
+     */
+    ConsoleLine line;
+
+    TickType_t last_blink = xTaskGetTickCount();
+    uint8_t    blink_phase = 0;
+
     /* Let every task run through a few normal cycles before reading HWM. */
-    vTaskDelay(pdMS_TO_TICKS(5000));
-    print_stack_audit();
+    TickType_t audit_at = xTaskGetTickCount() + pdMS_TO_TICKS(5000);
+    uint8_t    audit_done = 0;
 
-    while (1)
+    for (;;)
     {
-        GPIOA->ODR ^= (1U << 5);
+        if (xQueueReceive(consoleQueue, &line, pdMS_TO_TICKS(50)) == pdPASS)
+        {
+            uart2_write_str(line.text);
+            uart2_write_str("\r\n");
+        }
 
-        vTaskDelay(
-            pdMS_TO_TICKS(500)
-        );
+        TickType_t now = xTaskGetTickCount();
+
+        if ((audit_done == 0U) && ((int32_t)(now - audit_at) >= 0))
+        {
+            audit_done = 1U;
+            print_stack_audit();
+        }
+
+        /*
+         * Heartbeat.
+         *
+         * A healthy 180 MHz board from the HSE gives a steady 1 Hz blink.
+         * When the HSE was dead and the clock fell back to the HSI PLL,
+         * the console may be unreadable - HSI is only about 1% accurate
+         * at room temperature and worse across range, which is enough to
+         * corrupt 115200 framing. So the fallback gets a visually
+         * distinct double-pulse instead: blink-blink-pause, once a
+         * second, readable across the room with no UART at all.
+         */
+        if (g_clock_status == CLOCK_DEGRADED_HSI_PLL)
+        {
+            /* 80 ms, 80 ms, 80 ms, then rest to fill 1000 ms. */
+            static const TickType_t pattern[4] = { 80, 80, 80, 760 };
+
+            if ((now - last_blink) >= pdMS_TO_TICKS(pattern[blink_phase]))
+            {
+                last_blink = now;
+                blink_phase = (uint8_t)((blink_phase + 1U) & 0x3U);
+
+                if (blink_phase == 3U)
+                {
+                    GPIOA->BSRR = (1U << (5 + 16));   /* off during rest */
+                }
+                else
+                {
+                    GPIOA->ODR ^= (1U << 5);
+                }
+            }
+        }
+        else
+        {
+            if ((now - last_blink) >= pdMS_TO_TICKS(500))
+            {
+                last_blink = now;
+                GPIOA->ODR ^= (1U << 5);
+            }
+        }
     }
 }
 
@@ -241,6 +315,20 @@ int main(void)
      */
     system_clock_init();
 
+    /*
+     * A fatal clock status means the core is on the raw 16 MHz HSI. Every
+     * UART divisor assumes a 45 MHz APB1, so the console would emit
+     * garbage, and configCPU_CLOCK_HZ is a 180 MHz literal, so SysTick
+     * would be programmed 11.25x fast. Neither the console nor the
+     * scheduler can be trusted; blink the status code on LD2 forever and
+     * go no further. This is also the invariant that lets
+     * configCPU_CLOCK_HZ be a literal at all.
+     */
+    if (clock_status_is_fatal(g_clock_status))
+    {
+        clock_fault_blink_forever(g_clock_status);
+    }
+
 
     /*
      * 2. Initialize the LD2 heartbeat LED on PA5.
@@ -297,14 +385,7 @@ int main(void)
     SD_Status sd_status =
         sd_init();
 
-    if (sd_status == SD_OK)
-    {
-        printf("SD OK\r\n");
-    }
-    else
-    {
-        printf("SD FAIL\r\n");
-    }
+    printf("SD: %s\r\n", sd_status_str(sd_status));
 
 
     /*
@@ -473,22 +554,42 @@ int main(void)
 
     /*
      * Phase 8 — control_task -> logging_task.
-     * Depth 4: absorbs one slow SD write cycle without blocking
-     * control_task's non-blocking send.
+     *
+     * Depth 8 of LogQueueItem (44 B) = 352 B of storage. Records arrive
+     * at 5 Hz and logging_task drains them into its staging block almost
+     * instantly, only stalling when it posts a full block to the bus
+     * owner. Depth 8 covers 1.6 s of records, comfortably longer than the
+     * 250 ms worst-case SD program cycle that could hold it up.
      */
     logQueue =
         xQueueCreate(
-            4,
-            sizeof(LogRecord)
+            8,
+            sizeof(LogQueueItem)
         );
 
     /*
-     * Phase 8 — logging_task -> display_task (SPI bus owner).
+     * Phase 8 — logging_task -> spi_owner_task.
+     *
+     * SpiRequest carries a whole 512-byte block by value, so each slot is
+     * ~520 B. Depth 2 = ~1.1 KB of heap. Blocks now leave only every
+     * ~2.4 s, so depth 2 is 4.8 s of absorption against a 250 ms
+     * worst-case write. Passing by value rather than by pointer costs one
+     * 512-byte memcpy per block - negligible at 0.4 Hz - and avoids any
+     * buffer-ownership handoff between the two tasks.
      */
     spiRequestQueue =
         xQueueCreate(
-            4,
+            2,
             sizeof(SpiRequest)
+        );
+
+    /*
+     * Phase 8 — every task -> dummy_task, the single stdio owner.
+     */
+    consoleQueue =
+        xQueueCreate(
+            CONSOLE_QUEUE_DEPTH,
+            sizeof(ConsoleLine)
         );
 
     /*
@@ -504,7 +605,8 @@ int main(void)
         bar30Queue == NULL ||
         stateQueue == NULL ||
         logQueue == NULL ||
-        spiRequestQueue == NULL)
+        spiRequestQueue == NULL ||
+        consoleQueue == NULL)
     {
         printf("QUEUE CREATE FAIL\r\n");
 
@@ -527,9 +629,9 @@ int main(void)
      *   6  Filter    must have a fresh estimate ready before Control wakes
      *   5  Comms     command ingest and telemetry egress
      *   4  VN200 / DVL / Bar30   sensor drivers, equal and interchangeable
-     *   3  Display   owns SPI2
-     *   2  Logging   feeds Display; never touches SPI itself
-     *   1  Dummy     heartbeat and the one-shot stack audit
+     *   3  SPIOwner  sole owner of SPI2 (OLED + SD)
+     *   2  Logging   batches records; posts blocks to the bus owner
+     *   1  Dummy     heartbeat, stack audit, single stdio owner
      *   0  IDLE      kernel
      *
      * Priority 2 is no longer shared with anything: configUSE_TIMERS is
@@ -543,7 +645,7 @@ int main(void)
     create_task_checked(vn200_task,   "VN200 Task",   256, 4, &vn200TaskHandle);
     create_task_checked(dvl_task,     "DVL Task",     256, 4, &dvlTaskHandle);
     create_task_checked(bar30_task,   "Bar30 Task",   256, 4, &bar30TaskHandle);
-    create_task_checked(display_task, "Display Task", 256, 3, &displayTaskHandle);
+    create_task_checked(spi_owner_task, "SPI Owner",   256, 3, &spiOwnerTaskHandle);
     create_task_checked(logging_task, "Logging Task", 256, 2, &loggingTaskHandle);
     create_task_checked(dummy_task,   "Dummy",        128, 1, &dummyTaskHandle);
 

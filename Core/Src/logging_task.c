@@ -1,45 +1,152 @@
 #include "logging_task.h"
-#include "display_task.h"
+#include "spi_owner_task.h"
+#include "sd_logger.h"
 
 #include "FreeRTOS.h"
 #include "task.h"
 
+#include <string.h>
+
 /*
- * logging_task does not touch SPI directly (bus-owner architecture —
- * see display_task.c). It only receives LogRecords assembled by
- * control_task and forwards them as a request for display_task to
- * execute.
+ * logging_task never touches SPI. It accumulates records into a staging
+ * block and hands finished blocks to spi_owner_task, which is the only
+ * task allowed near the bus. See spi_owner_task.h for why that is a bus
+ * owner and not a mutex.
  */
-#define SPI_REQUEST_TIMEOUT_MS   50U
+
+/*
+ * Bounded wait when posting a finished block to the bus owner.
+ *
+ * A block now leaves roughly every 2.4 s and the owner needs at most
+ * ~250 ms for a worst-case card, so 500 ms is generous. If the owner is
+ * still busy past that, the block is dropped rather than backing this
+ * task up indefinitely - dropping 12 records of telemetry is preferable
+ * to stalling and losing the ones that follow.
+ */
+#define SPI_POST_TIMEOUT_MS   500U
 
 QueueHandle_t logQueue = NULL;
 
+/* Staging block, static rather than on the stack: 512 bytes is four times
+ * this task's entire stack allocation. */
+static uint8_t  staging[SPI_BLOCK_BYTES];
+static uint16_t staged_count = 0;
+static uint32_t block_seq    = 0;
+static uint32_t first_ts     = 0;
+
+static uint32_t blocks_emitted   = 0;
+static uint32_t records_staged   = 0;
+static uint32_t spi_post_drops   = 0;
+
+uint32_t logging_blocks_emitted(void)  { return blocks_emitted; }
+uint32_t logging_records_staged(void)  { return records_staged; }
+uint32_t logging_spi_post_drops(void)  { return spi_post_drops; }
+
+static void staging_reset(void)
+{
+    memset(staging, 0, sizeof(staging));
+    staged_count = 0;
+    first_ts     = 0;
+}
+
+/*
+ * Seal the staging block and hand it to the bus owner. A partial block is
+ * perfectly valid - record_count says how many entries are real, and the
+ * remainder is zero.
+ */
+static void staging_flush(void)
+{
+    if (staged_count == 0U)
+    {
+        return;   /* nothing to write; do not burn a block */
+    }
+
+    LogBlockHeader header;
+
+    header.magic           = LOG_BLOCK_MAGIC;
+    header.seq             = block_seq;
+    header.record_count    = staged_count;
+    header.record_size     = (uint16_t)sizeof(LogRecord);
+    header.first_timestamp = first_ts;
+
+    memcpy(staging, &header, sizeof(header));
+
+    SpiRequest req;
+
+    req.type       = SPI_REQ_SD_BLOCK;
+    req.block_addr = sd_logger_block_for_seq(block_seq);
+    memcpy(req.block, staging, SPI_BLOCK_BYTES);
+
+    if (xQueueSend(spiRequestQueue,
+                   &req,
+                   pdMS_TO_TICKS(SPI_POST_TIMEOUT_MS)) == pdPASS)
+    {
+        blocks_emitted++;
+        block_seq++;
+    }
+    else
+    {
+        /* Bus owner wedged. Drop the block and keep going - but do not
+         * advance the sequence number, so a gap in seq on the card means
+         * exactly this and nothing else. */
+        spi_post_drops++;
+    }
+
+    staging_reset();
+}
+
+static void staging_add(const LogRecord *record)
+{
+    if (staged_count >= LOG_RECORDS_PER_BLOCK)
+    {
+        staging_flush();
+    }
+
+    if (staged_count == 0U)
+    {
+        first_ts = record->timestamp_ms;
+    }
+
+    memcpy(
+        &staging[sizeof(LogBlockHeader) + (staged_count * sizeof(LogRecord))],
+        record,
+        sizeof(LogRecord)
+    );
+
+    staged_count++;
+    records_staged++;
+
+    /* Emit as soon as the block is full rather than waiting for the next
+     * record, so a vehicle that stops logging still leaves a complete
+     * final block on the card. */
+    if (staged_count >= LOG_RECORDS_PER_BLOCK)
+    {
+        staging_flush();
+    }
+}
 
 void logging_task(void *argument)
 {
     (void)argument;
 
-    LogRecord record;
+    LogQueueItem item;
+
+    staging_reset();
 
     while (1)
     {
-        if (xQueueReceive(logQueue, &record, portMAX_DELAY) == pdPASS)
+        if (xQueueReceive(logQueue, &item, portMAX_DELAY) == pdPASS)
         {
-            SpiRequest req;
-
-            req.type   = SPI_REQ_SD_LOG;
-            req.record = record;
-
-            /*
-             * Bounded wait — if display_task is stuck mid SD write
-             * for longer than this, drop the record rather than
-             * let a slow bus owner back this task up indefinitely.
-             */
-            xQueueSend(
-                spiRequestQueue,
-                &req,
-                pdMS_TO_TICKS(SPI_REQUEST_TIMEOUT_MS)
-            );
+            if (item.kind == LOG_ITEM_FLUSH)
+            {
+                /* Disarm or failsafe: get whatever is staged onto the
+                 * card now. This is the data most worth having. */
+                staging_flush();
+            }
+            else
+            {
+                staging_add(&item.record);
+            }
         }
     }
 }

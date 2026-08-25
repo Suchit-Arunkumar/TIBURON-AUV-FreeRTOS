@@ -7,9 +7,23 @@
  * System configuration
  *----------------------------------------------------------*/
 
-extern uint32_t SystemCoreClock;
-
-#define configCPU_CLOCK_HZ                     (SystemCoreClock)
+/*
+ * Literal, deliberately NOT the SystemCoreClock variable.
+ *
+ * port.c reads this once, in xPortStartScheduler, to compute the SysTick
+ * reload. Routing that through a runtime variable means the tick rate
+ * depends on something having called SystemCoreClockUpdate() after the
+ * clock switch, and on SystemCoreClockUpdate() re-deriving the right
+ * answer from HSE_VALUE and PLLCFGR. Two independent ways to silently
+ * desync SysTick from the hardware; a literal has none.
+ *
+ * The invariant that makes a literal safe: every code path that reaches
+ * vTaskStartScheduler() is running at 180 MHz. system_clock_init() either
+ * achieves 180 MHz (from HSE, or from the HSI PLL fallback) or returns a
+ * fatal status, and main halts in the LD2 fault blink without starting
+ * the scheduler. See clock_status_is_fatal().
+ */
+#define configCPU_CLOCK_HZ                     (180000000UL)
 #define configTICK_RATE_HZ                     ((TickType_t)1000)
 
 #define configTICK_TYPE_WIDTH_IN_BITS          TICK_TYPE_WIDTH_32_BITS
