@@ -48,9 +48,21 @@ void comms_task(void *argument)
             telemetry.armed = control_loop_get_armed();
             telemetry.link_ok = control_loop_get_link();
 
-            control_loop_get_pwm(
+            /*
+             * TelemetryPayload is __packed__, so esc_pwm is not
+             * guaranteed to be 2-byte aligned and passing its address to
+             * a uint16_t* parameter is undefined behaviour on a target
+             * that faults on unaligned access. Fill an aligned local and
+             * copy the bytes in.
+             */
+            uint16_t pwm_aligned[8];
+
+            control_loop_get_pwm(pwm_aligned, 8);
+
+            memcpy(
                 telemetry.esc_pwm,
-                8
+                pwm_aligned,
+                sizeof(pwm_aligned)
             );
 
             packet_build_telemetry(

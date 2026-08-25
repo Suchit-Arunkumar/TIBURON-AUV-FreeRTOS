@@ -51,6 +51,14 @@ SD_Status sd_init(void)
     r1 = sd_send_cmd(8, 0x000001AA, 0x87);
     uint8_t r7[4];
     for (uint8_t i = 0; i < 4; i++) r7[i] = spi_receive();
+
+    /*
+     * These four bytes must be clocked out whether or not we inspect
+     * them, otherwise the next command starts mid-response. Validating
+     * the 0x01AA echo to tell a v1 card from a v2 card belongs with the
+     * rest of the SD rework in Phase 8.
+     */
+    (void)r7;
     spi_deselect_sd();
     spi_transmit(0xFF);
 
