@@ -219,7 +219,19 @@ ClockStatus system_clock_init(void)
     {
         if ((RCC->CFGR & RCC_CFGR_SWS) == RCC_CFGR_SWS_PLL)
         {
-            SystemCoreClockUpdate();
+            /*
+             * Set the CMSIS variable from ground truth rather than asking
+             * SystemCoreClockUpdate() to re-derive it from HSE_VALUE and
+             * PLLCFGR. Both PLL configurations above are built to land on
+             * exactly SYSCLK_HZ, so this is the authoritative value and
+             * the derivation is just another chance to be wrong.
+             *
+             * FreeRTOS does not read this - configCPU_CLOCK_HZ is a
+             * literal - but anything else that consults SystemCoreClock
+             * now gets the right answer.
+             */
+            SystemCoreClock = SYSCLK_HZ;
+
             g_clock_status = status;
             return status;
         }
@@ -228,6 +240,81 @@ ClockStatus system_clock_init(void)
     fall_back_to_raw_hsi();
     g_clock_status = CLOCK_FAULT_SWITCH_TIMEOUT;
     return g_clock_status;
+}
+
+/*
+ * LD2 fault blink - the only diagnostic that survives a broken clock.
+ *
+ * On any fatal clock status the core is on the raw 16 MHz HSI. Every UART
+ * divisor in the tree assumes a 45 MHz APB1, so USART2 would run at
+ * 16e6/391 = 40.9 kBaud against a host expecting 115200 and the console
+ * would be unreadable garbage. The LED is all that is left.
+ *
+ * Pattern: the status code as a count of short pulses, then a long gap,
+ * forever. Count the blinks to identify the fault without a debugger:
+ *
+ *   2 blinks -> CLOCK_FAULT_PLL_TIMEOUT
+ *   3 blinks -> CLOCK_FAULT_OVERDRIVE_TIMEOUT
+ *   4 blinks -> CLOCK_FAULT_SWITCH_TIMEOUT
+ *
+ * Timing is cycle-counted against 16 MHz, not tick-based - there is no
+ * scheduler and SysTick is not running.
+ */
+
+#define HSI_FALLBACK_HZ         16000000UL
+#define BLINK_LOOP_CYCLES       4UL     /* volatile inc + cmp + branch */
+
+static void blink_delay_ms(uint32_t ms)
+{
+    uint32_t iterations = (HSI_FALLBACK_HZ / 1000UL / BLINK_LOOP_CYCLES) * ms;
+
+    for (volatile uint32_t i = 0; i < iterations; i++)
+    {
+    }
+}
+
+void clock_fault_blink_forever(ClockStatus s)
+{
+    /* Configure PA5 here rather than assuming gpio_init has run - this is
+     * reachable before any driver is up. */
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
+    (void)RCC->AHB1ENR;
+
+    GPIOA->MODER &= ~(3UL << (2 * 5));
+    GPIOA->MODER |=  (1UL << (2 * 5));
+
+    uint32_t pulses = (uint32_t)s;
+
+    if (pulses == 0UL)
+    {
+        pulses = 1UL;   /* never render a silent pattern */
+    }
+
+    for (;;)
+    {
+        for (uint32_t i = 0; i < pulses; i++)
+        {
+            GPIOA->BSRR = (1UL << 5);
+            blink_delay_ms(150UL);
+
+            GPIOA->BSRR = (1UL << (5 + 16));
+            blink_delay_ms(150UL);
+        }
+
+        blink_delay_ms(1200UL);
+    }
+}
+
+int clock_status_is_fatal(ClockStatus s)
+{
+    /*
+     * OK and DEGRADED both leave the core at 180 MHz, so every derived
+     * BRR, CCR and PSC stays valid and the scheduler may start. Every
+     * other status means the board fell back to the raw 16 MHz HSI, where
+     * the UART baud divisors are off by 11.25x and nothing downstream is
+     * trustworthy - including the console that would have reported it.
+     */
+    return (s != CLOCK_OK_HSE) && (s != CLOCK_DEGRADED_HSI_PLL);
 }
 
 const char *system_clock_status_str(ClockStatus s)

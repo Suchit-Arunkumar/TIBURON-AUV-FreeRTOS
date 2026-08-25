@@ -1,34 +1,20 @@
 #include "sd_logger.h"
-#include "sd_card.h"
 
-#include <string.h>
+/*
+ * The old sd_logger_write() wrote one 512-byte block per 40-byte record:
+ * 12.8x write amplification and one program cycle per record. Records are
+ * now batched into full blocks by logging_task, so all that remains here
+ * is the sequence-to-address mapping.
+ */
 
-static uint32_t current_block = 0;
+static uint32_t base_block = SD_LOG_FIRST_BLOCK;
 
 void sd_logger_init(void)
 {
-    // Skip boot sector / partition table area
-    current_block = 100;
+    base_block = SD_LOG_FIRST_BLOCK;
 }
 
-SD_Status sd_logger_write(const LogRecord *record)
+uint32_t sd_logger_block_for_seq(uint32_t seq)
 {
-    uint8_t buf[512];
-
-    // Clear entire sector
-    memset(buf, 0, sizeof(buf));
-
-    // Copy record into start of sector
-    memcpy(buf, record, sizeof(LogRecord));
-
-    // Write sector to SD card
-    SD_Status status = sd_write_block(current_block, buf);
-
-    // Advance only if write succeeded
-    if (status == SD_OK)
-    {
-        current_block++;
-    }
-
-    return status;
+    return base_block + seq;
 }
