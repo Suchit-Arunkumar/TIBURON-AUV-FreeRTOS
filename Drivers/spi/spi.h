@@ -18,9 +18,16 @@
  *   110  128  351.563 kHz   SD init — inside the 100-400 kHz window
  *   111  256  175.781 kHz
  *
- * div 128 is the only divisor that lands in the SD card's mandatory
- * 100-400 kHz initialisation window; div 64 at 703 kHz is already out.
- * See Phase 8 for the arithmetic behind the full-speed choices.
+ * Two divisors land in the SD card's mandatory 100-400 kHz
+ * initialisation window: div 128 (351.6 kHz) and div 256 (175.8 kHz).
+ * div 128 is chosen because it is the faster of the two, not because it
+ * is the only option. div 64 at 703 kHz is already outside the window.
+ *
+ * SD data rate starts at div 8 rather than div 4. 11.25 MHz is within
+ * what any SDHC card will accept, but it is optimistic over Nucleo jumper
+ * wiring with no controlled impedance. Raise SPI_BR_SD_DATA to
+ * SPI_BR_DIV4 once the card reads reliably on the real harness - one
+ * constant, one edit.
  */
 #define SPI_BR_DIV2     (0U << 3)
 #define SPI_BR_DIV4     (1U << 3)
@@ -32,9 +39,9 @@
 #define SPI_BR_DIV256   (7U << 3)
 
 /* Named rates, so call sites say what they mean. */
-#define SPI_BR_SD_INIT      SPI_BR_DIV128   /* 351.6 kHz */
-#define SPI_BR_SD_FAST      SPI_BR_DIV4     /*  11.25 MHz */
-#define SPI_BR_OLED         SPI_BR_DIV8     /*   5.625 MHz */
+#define SPI_BR_SD_INIT      SPI_BR_DIV128   /* 351.563 kHz - identification */
+#define SPI_BR_SD_DATA      SPI_BR_DIV8     /*   5.625 MHz - conservative start */
+#define SPI_BR_OLED         SPI_BR_DIV8     /*   5.625 MHz - SSD1306 ceiling ~10 MHz */
 
 void    spi2_init(void);
 

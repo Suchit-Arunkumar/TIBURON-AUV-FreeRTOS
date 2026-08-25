@@ -339,11 +339,25 @@ bool control_loop_get_link(void)
 /*
  * P8: log every LOG_DECIMATION-th control tick.
  *
- * Control runs at 50 Hz. SD writes end in an unbounded busy-wait
- * (sd_card.c), so logging every tick would risk overrunning logQueue.
- * 50 Hz / 10 = 5 Hz log rate.
+ * Control runs at 50 Hz; 50/10 = 5 Hz of records. Records are batched
+ * into 512-byte blocks by logging_task, so this rate no longer implies
+ * one SD block program per record.
  */
 #define LOG_DECIMATION   10U
+
+/*
+ * Records dropped because logQueue was full.
+ *
+ * Non-zero means the logging pipeline could not keep up - almost
+ * certainly the bus owner stuck in a long SD program cycle. Reported
+ * over the console rather than inferred from gaps in the data.
+ */
+static uint32_t log_drop_count = 0;
+
+uint32_t control_log_drops(void)
+{
+    return log_drop_count;
+}
 
 void control_task(void *argument)
 {
@@ -412,12 +426,45 @@ void control_task(void *argument)
 	    );
 
 	    /*
+	     * Flush the staging block on the armed->disarmed edge.
+	     *
+	     * enterFailsafe() clears g_armed, so a comms timeout produces
+	     * this edge too and both cases are covered by one check. The
+	     * records straddling a failsafe trip are the ones most worth
+	     * having on the card, and without this they would sit in RAM
+	     * until the block happened to fill - up to 2.4 s later, or
+	     * never, if the board is then power-cycled.
+	     */
+	    {
+	        static uint8_t prev_armed = 0;
+	        uint8_t now_armed = control_loop_get_armed() ? 1U : 0U;
+
+	        if ((prev_armed == 1U) && (now_armed == 0U) && (logQueue != NULL))
+	        {
+	            LogQueueItem flush_item;
+
+	            flush_item.kind = LOG_ITEM_FLUSH;
+	            memset(&flush_item.record, 0, sizeof(flush_item.record));
+
+	            /* Zero block time here too - see below. */
+	            if (xQueueSend(logQueue, &flush_item, 0) != pdPASS)
+	            {
+	                log_drop_count++;
+	            }
+	        }
+
+	        prev_armed = now_armed;
+	    }
+
+	    /*
 	     * P8: forward a decimated log record to logging_task.
 	     *
-	     * xQueueSend with a 0 timeout — control must never block on
-	     * SPI/SD timing. If logQueue is full (logging pipeline
-	     * stalled), this record is silently dropped rather than
-	     * risk missing a 50 Hz tick.
+	     * xQueueSend with a ZERO block time, always. control_task must
+	     * never wait on the logging pipeline: a full logQueue means the
+	     * bus owner is mid SD program cycle, which can legitimately last
+	     * 250 ms, and blocking here would miss twelve 50 Hz deadlines.
+	     * Dropping the record is the correct trade - and it is counted,
+	     * not silent.
 	     */
 	    log_tick_count++;
 
@@ -427,32 +474,43 @@ void control_task(void *argument)
 
 	        if (logQueue != NULL)
 	        {
-	            LogRecord record;
+	            LogQueueItem item;
+	            LogRecord *record = &item.record;
 	            float pose_now[N_DOF];
 	            uint16_t pwm_now[N_THR];
 
+	            item.kind = LOG_ITEM_RECORD;
+
 	            control_loop_get_pose(pose_now);
 	            control_loop_get_pwm(pwm_now, N_THR);
-	            memcpy(record.pwm, pwm_now, sizeof(pwm_now));
+	            memcpy(record->pwm, pwm_now, sizeof(pwm_now));
 
-	            record.timestamp_ms = (uint32_t)xTaskGetTickCount();
-	            record.depth_m      = pose_now[2];
-	            record.roll_deg     = pose_now[3];
-	            record.pitch_deg    = pose_now[4];
-	            record.yaw_deg      = pose_now[5];
-	            record.armed        = control_loop_get_armed() ? 1 : 0;
-	            record.link_ok      = control_loop_get_link()  ? 1 : 0;
-	            record.crc16        = 0;
+	            record->timestamp_ms = (uint32_t)xTaskGetTickCount();
+	            record->depth_m      = pose_now[2];
+	            record->roll_deg     = pose_now[3];
+	            record->pitch_deg    = pose_now[4];
+	            record->yaw_deg      = pose_now[5];
+	            record->armed        = control_loop_get_armed() ? 1 : 0;
+	            record->link_ok      = control_loop_get_link()  ? 1 : 0;
+	            record->crc16        = 0;
 
-	            record.crc16 = (uint16_t)crc_compute(
-	                (const uint8_t *)&record,
-	                sizeof(LogRecord) - sizeof(record.crc16)
+	            /*
+	             * Hardware CRC32 truncated to its low 16 bits - this is a
+	             * truncated CRC32, not a CRC16, and the field name is
+	             * historical. Computed over the record excluding the
+	             * field itself, which is why crc16 is last in the struct.
+	             */
+	            record->crc16 = (uint16_t)crc_compute(
+	                (const uint8_t *)record,
+	                sizeof(LogRecord) - sizeof(record->crc16)
 	            );
 
-	            xQueueSend(logQueue, &record, 0);
+	            if (xQueueSend(logQueue, &item, 0) != pdPASS)
+	            {
+	                log_drop_count++;
+	            }
 	        }
 	    }
 
-	    GPIOA->ODR ^= (1U << 5);
 	}
 }

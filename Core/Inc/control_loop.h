@@ -23,6 +23,9 @@
 extern bool link_ok;
 extern QueueHandle_t stateQueue;
 
+/* Log records dropped because logQueue was full. */
+uint32_t control_log_drops(void);
+
 void control_loop_get_pwm(uint16_t *out, uint8_t len);
 void control_loop_get_pose(float out[N_DOF]);
 bool control_loop_get_armed(void);
