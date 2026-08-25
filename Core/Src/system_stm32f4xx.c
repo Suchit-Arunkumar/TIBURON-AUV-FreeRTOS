@@ -48,7 +48,12 @@
 #include "stm32f4xx.h"
 
 #if !defined  (HSE_VALUE) 
-  #define HSE_VALUE    ((uint32_t)25000000) /*!< Default value of the External oscillator in Hz */
+  /* Nucleo-F446RE: no crystal is fitted. HSE is an 8 MHz bypass clock
+     from the ST-LINK MCO. The ST default of 25000000 is wrong for this
+     board and makes SystemCoreClockUpdate() report 562.5 MHz, which
+     FreeRTOS would then use to program SysTick. Also passed as
+     -DHSE_VALUE=8000000U so the value is right under any build system. */
+  #define HSE_VALUE    ((uint32_t)8000000)
 #endif /* HSE_VALUE */
 
 #if !defined  (HSI_VALUE)

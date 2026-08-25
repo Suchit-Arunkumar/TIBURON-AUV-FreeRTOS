@@ -20,7 +20,6 @@
 #define PWM_RAMP_STEP   50      /* µs per 50 Hz tick → 2500 µs/s slew rate  */
 #define CMD_TIMEOUT_MS  500u    /* ms without a valid CMD before failsafe     */
 
-extern volatile uint32_t g_tick;
 extern bool link_ok;
 extern QueueHandle_t stateQueue;
 
