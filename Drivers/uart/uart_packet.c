@@ -137,16 +137,25 @@ void USART1_IRQHandler(void)
 
         (void)dummy;
 
-        BaseType_t xHigherPriorityTaskWasWoken = pdFALSE;
+        /*
+         * B5: USART1 is enabled before comms_task is created, so a byte
+         * arriving in that window would reach a NULL handle and trip
+         * configASSERT inside the kernel. USART3 and UART4 already
+         * guarded this; USART1 did not.
+         */
+        if (commsTaskHandle != NULL)
+        {
+            BaseType_t xHigherPriorityTaskWasWoken = pdFALSE;
 
-        xTaskNotifyFromISR(
-            commsTaskHandle,
-            (1UL << 0),
-            eSetBits,
-            &xHigherPriorityTaskWasWoken
-        );
+            xTaskNotifyFromISR(
+                commsTaskHandle,
+                (1UL << 0),
+                eSetBits,
+                &xHigherPriorityTaskWasWoken
+            );
 
-        portYIELD_FROM_ISR(xHigherPriorityTaskWasWoken);
+            portYIELD_FROM_ISR(xHigherPriorityTaskWasWoken);
+        }
 
   }
 }

@@ -4,10 +4,12 @@
 // Ported from: ROV_6DOF_TUNING.ino  (RP2350 / arduino-pico)
 // Target:      STM32  (TIM7 fires at 50 Hz → dt = 0.02 s, always)
 //
-// External dependencies expected from the BSP / Day-2 infrastructure:
-//   void     pwm_set_us(uint8_t ch, uint16_t us)   — set ESC PWM channel
-//   uint32_t g_tick                                 — SysTick ms counter
-//   bool     link_ok                                — set/cleared here; read by comms layer
+// External dependencies expected from the BSP:
+//   void pwm_set_us(uint8_t ch, uint16_t us)  — set ESC PWM channel (0-7)
+//   bool link_ok                              — set/cleared here; read by comms
+//
+// Timing comes from FreeRTOS (xTaskGetTickCount), not from a SysTick
+// counter — the kernel owns SysTick.
 // =============================================================================
 
 #include "control_loop.h"
@@ -22,6 +24,8 @@
 #include "logging_task.h"
 #include "sd_logger.h"
 #include "crc_hw.h"
+#include "timer_basic.h"
+#include "iwdg.h"
 
 
 // =============================================================================
@@ -49,6 +53,7 @@ TaskHandle_t controlTaskHandle = NULL;
 // FORWARD  B  (6×8)   tau = B · T
 // INVERSE  B⁺ (8×6)   T  = B⁺ · U
 // =============================================================================
+__attribute__((unused))
 static const float B_forward[N_DOF][N_THR] = {
     { 0.0f,     0.0f,     0.0f,     0.0f,    0.7070f, -0.7070f,  0.7070f,  0.7070f},
     { 0.0f,     0.0f,     0.0f,     0.0f,   -0.7070f,  0.7070f,  0.7070f, -0.7070f},
@@ -347,6 +352,18 @@ void control_task(void *argument)
 
 	static uint32_t log_tick_count = 0;
 
+	/*
+	 * B6: start the 50 Hz tick here, not in main.
+	 *
+	 * TIM7's ISR notifies this task and calls portYIELD_FROM_ISR. Both
+	 * require the scheduler to be running and this handle to be
+	 * populated. Starting the timer from main left a window in which
+	 * neither was true. By the time this line executes, the scheduler has
+	 * started and controlTaskHandle is set, so the window is closed by
+	 * construction rather than by timing luck.
+	 */
+	tim7_init();
+
     // Run forever because FreeRTOS tasks are persistent execution contexts.
 	for (;;)
 	{
@@ -376,6 +393,16 @@ void control_task(void *argument)
 	    }
 
 	    control_loop_tick();
+
+	    /*
+	     * Refresh the watchdog only here, and only after a completed
+	     * tick. If this loop stops running, the board resets and the
+	     * ESCs lose their signal — which is what we want — rather than
+	     * staying alive with the last PWM values latched.
+	     *
+	     * Compiles to nothing unless ENABLE_IWDG is defined in iwdg.h.
+	     */
+	    iwdg_kick();
 
 	    /* Tell Comms Task that a telemetry update is ready */
 	    xTaskNotify(

@@ -66,5 +66,13 @@ float bar30_read(void)
     SENS = ((int64_t)prom[1] << 15) + ((int64_t)prom[3] * dT) / (1 << 8);
     P    = ((int64_t)D1 * SENS / (1 << 21) - OFF) / (1 << 13);
 
+    /*
+     * TEMP is part of the MS5837 first-order compensation sequence and is
+     * kept so this reads as the datasheet does, but this driver returns
+     * depth only. It would be needed for a temperature reading or for the
+     * second-order compensation, neither of which is implemented.
+     */
+    (void)TEMP;
+
     return (P - 101300.0f) / (1025.0f * 9.80665f);
 }

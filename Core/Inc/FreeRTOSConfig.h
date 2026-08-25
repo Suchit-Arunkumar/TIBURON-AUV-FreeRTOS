@@ -54,10 +54,12 @@ extern uint32_t SystemCoreClock;
  * Software timers
  *----------------------------------------------------------*/
 
-#define configUSE_TIMERS                       1
-#define configTIMER_TASK_PRIORITY              2
-#define configTIMER_QUEUE_LENGTH               10
-#define configTIMER_TASK_STACK_DEPTH           configMINIMAL_STACK_SIZE
+/*
+ * Off: xTimerCreate is called zero times in this codebase. Leaving it on
+ * cost a 128-word daemon task, its TCB and a 10-deep queue - 816 bytes of
+ * heap - and pinned priority 2, colliding with logging_task (D12).
+ */
+#define configUSE_TIMERS                       0
 
 /*-----------------------------------------------------------
  * Co-routines
@@ -69,6 +71,15 @@ extern uint32_t SystemCoreClock;
 /*-----------------------------------------------------------
  * Memory allocation
  *----------------------------------------------------------*/
+
+/*
+ * Left 0. newlib reentrancy is not needed because stdio is confined to a
+ * single task: dummy_task owns every printf after the scheduler starts,
+ * and main owns every printf before it. Turning this on would add a
+ * struct _reent (~96 bytes) to every task's TCB for no benefit. If a
+ * second task ever calls printf, this must become 1.
+ */
+#define configUSE_NEWLIB_REENTRANT              0
 
 #define configSUPPORT_STATIC_ALLOCATION         0
 #define configSUPPORT_DYNAMIC_ALLOCATION        1
@@ -136,17 +147,22 @@ extern uint32_t SystemCoreClock;
 
 /*-----------------------------------------------------------
  * Assertions
+ *
+ * A failing configASSERT latches file, line and the caller's PC into a
+ * .noinit struct that survives a warm reset, then breaks and halts. See
+ * Core/Inc/fault_latch.h. Declared rather than included because this
+ * header is pulled into every kernel translation unit.
  *----------------------------------------------------------*/
+
+void fault_assert_failed(const char *file, uint32_t line) __attribute__((noreturn));
+
 
 #define configASSERT(x)                                      \
     do                                                       \
     {                                                        \
         if ((x) == 0)                                        \
         {                                                    \
-            taskDISABLE_INTERRUPTS();                       \
-            for (;;)                                         \
-            {                                                \
-            }                                                \
+            fault_assert_failed(__FILE__, __LINE__);         \
         }                                                    \
     } while (0)
 

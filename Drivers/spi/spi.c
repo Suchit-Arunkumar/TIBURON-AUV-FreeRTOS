@@ -1,124 +1,153 @@
 #include "spi.h"
 #include "stm32f446xx.h"
 
-void spi1_init(void)
+/*
+ * SPI2 — shared bus for the SSD1306 OLED and the SD card.
+ *
+ * Moved off SPI1 (PA5/PA6/PA7) because that mapping collided with LD2 on
+ * PA5 and with TIM3_CH1 on PA6; audit finding B3. SPI2 on PB13/14/15 is
+ * clear of every other function in the final pin map.
+ *
+ *   PB13  SPI2_SCK   AF5
+ *   PB14  SPI2_MISO  AF5
+ *   PB15  SPI2_MOSI  AF5
+ *   PC4   SD_CS      GPIO out, idle high
+ *   PC5   OLED_CS    GPIO out, idle high
+ *
+ * SPI2 sits on APB1 = 45 MHz, so the BR field divides 45 MHz. See
+ * spi.h for the divisor table and why each rate was chosen.
+ */
+
+void spi2_init(void)
 {
-    // 1. enable GPIOA clock in RCC AHB1ENR
-    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
-
-    // 2. enable GPIOB clock in RCC AHB1ENR
+    /* 1. Peripheral clocks: GPIOB (bus pins), GPIOC (both chip selects). */
     RCC->AHB1ENR |= RCC_AHB1ENR_GPIOBEN;
+    RCC->AHB1ENR |= RCC_AHB1ENR_GPIOCEN;
+    RCC->APB1ENR |= RCC_APB1ENR_SPI2EN;
 
-    // 3. enable SPI1 clock in RCC APB2ENR
-    RCC->APB2ENR |= RCC_APB2ENR_SPI1EN;
+    /* 2. PB13/14/15 to alternate function mode. Mask-then-set, never a
+     *    bare OR — a stale MODER field is how B3 happened. */
+    GPIOB->MODER &= ~((3U << (2 * 13)) | (3U << (2 * 14)) | (3U << (2 * 15)));
+    GPIOB->MODER |=  ((2U << (2 * 13)) | (2U << (2 * 14)) | (2U << (2 * 15)));
 
-    // 4. configure PA5 (SCK) as alternate function mode (MODER = 10)
-    GPIOA->MODER &= ~(3U << (2*5));
-    GPIOA->MODER |=  (2U << (2*5));
+    /* 3. High speed on all three — the bus runs at up to 11.25 MHz. */
+    GPIOB->OSPEEDR |= (3U << (2 * 13)) | (3U << (2 * 14)) | (3U << (2 * 15));
 
-    // 5. configure PA6 (MISO) as alternate function mode (MODER = 10)
-    GPIOA->MODER &= ~(3U << (2*6));
-    GPIOA->MODER |=  (2U << (2*6));
+    /* 4. AF5 = SPI2 for all three. Pins 13-15 live in AFR[1], at
+     *    nibble (pin - 8). */
+    GPIOB->AFR[1] &= ~((0xFU << ((13 - 8) * 4)) |
+                       (0xFU << ((14 - 8) * 4)) |
+                       (0xFU << ((15 - 8) * 4)));
+    GPIOB->AFR[1] |=  ((5U << ((13 - 8) * 4)) |
+                       (5U << ((14 - 8) * 4)) |
+                       (5U << ((15 - 8) * 4)));
 
-    // 6. configure PA7 (MOSI) as alternate function mode (MODER = 10)
-    GPIOA->MODER &= ~(3U << (2*7));
-    GPIOA->MODER |=  (2U << (2*7));
+    /* 5. Chip selects as push-pull outputs. Driven high BEFORE they are
+     *    switched to outputs, so neither device sees a spurious select
+     *    during the mode change. */
+    GPIOC->BSRR = (1U << 4) | (1U << 5);
 
-    // 7. set PA5, PA6, PA7 to high speed in OSPEEDR
-    GPIOA->OSPEEDR |= (3U << (2*5));
-    GPIOA->OSPEEDR |= (3U << (2*6));
-    GPIOA->OSPEEDR |= (3U << (2*7));
+    GPIOC->MODER &= ~((3U << (2 * 4)) | (3U << (2 * 5)));
+    GPIOC->MODER |=  ((1U << (2 * 4)) | (1U << (2 * 5)));
 
-    // 8. set PA5 to AF5 in AFR[0]
-    GPIOA->AFR[0] |= (5U << 20);
+    GPIOC->OSPEEDR |= (3U << (2 * 4)) | (3U << (2 * 5));
 
-    // 9. set PA6 to AF5 in AFR[0]
-    GPIOA->AFR[0] |= (5U << 24);
+    /* Re-assert idle-high now that they are genuinely outputs. */
+    GPIOC->BSRR = (1U << 4) | (1U << 5);
 
-    // 10. set PA7 to AF5 in AFR[0]
-    GPIOA->AFR[0] |= (5U << 28);
+    /* 6. CR1, composed in one write.
+     *    SSM+SSI  software slave management, internal NSS high (no MODF)
+     *    MSTR     master
+     *    BR       start slow; the bus owner sets the real rate per device
+     *    CPOL=0, CPHA=0  SPI mode 0 — what both the SSD1306 and SD
+     *                    cards in SPI mode require. */
+    SPI2->CR1 = SPI_CR1_SSM | SPI_CR1_SSI | SPI_CR1_MSTR | SPI_BR_DIV256;
 
-    // 11. configure PA4 (CS_OLED) as GPIO output (MODER = 01)
-    GPIOA->MODER &= ~(3U << (2*4));
-    GPIOA->MODER |=  (1U << (2*4));
+    SPI2->CR2 = 0U;
 
-    // 12. configure PB0 (CS_SD) as GPIO output (MODER = 01)
-    GPIOB->MODER &= ~(3U << (2*0));
-    GPIOB->MODER |=  (1U << (2*0));
+    /* 7. Enable. */
+    SPI2->CR1 |= SPI_CR1_SPE;
+}
 
-    // 13. deselect both CS pins high using BSRR
-    GPIOA->BSRR = (1U << 4);   // PA4 high — OLED deselected
-    GPIOB->BSRR = (1U << 0);   // PB0 high — SD deselected
+void spi_set_baud(uint32_t br_bits)
+{
+    /*
+     * BR[2:0] may only be changed while the peripheral is disabled, and
+     * only while the bus is idle. Both chip selects are expected to be
+     * high when this is called — that is the bus owner's contract.
+     */
+    while (SPI2->SR & SPI_SR_BSY)
+    {
+    }
 
-    // 14. configure SPI_CR1
-    SPI1->CR1 |= SPI_CR1_SSM;      // software slave management
-    SPI1->CR1 |= SPI_CR1_SSI;      // internal NSS high, prevents MODF
-    SPI1->CR1 |= (3U << 3);        // BR[2:0] = 011 → fPCLK/16
-    SPI1->CR1 |= SPI_CR1_MSTR;     // master mode
-
-    // 15. enable SPI1 by setting SPE bit in CR1
-    SPI1->CR1 |= SPI_CR1_SPE;
+    SPI2->CR1 &= ~SPI_CR1_SPE;
+    SPI2->CR1 = (SPI2->CR1 & ~SPI_CR1_BR) | (br_bits & SPI_CR1_BR);
+    SPI2->CR1 |= SPI_CR1_SPE;
 }
 
 void spi_transmit(uint8_t data)
 {
-    // 1. wait until TXE flag is set in SR (TX buffer empty)
-    while(!(SPI1->SR & SPI_SR_TXE));
+    /* 1. Wait for room in the TX buffer. */
+    while (!(SPI2->SR & SPI_SR_TXE))
+    {
+    }
 
-    // 2. write data to DR as 8-bit (cast DR pointer to uint8_t*)
-    *((__IO uint8_t*)&SPI1->DR) = data;
+    /* 2. 8-bit access to DR. A 16-bit write would clock out two frames. */
+    *((__IO uint8_t *)&SPI2->DR) = data;
 
-    // 3. wait until TXE flag is set again (shift register drained)
-    while(!(SPI1->SR & SPI_SR_TXE));
+    /* 3. Wait for the byte to reach the shift register, then for the
+     *    shift register to empty. */
+    while (!(SPI2->SR & SPI_SR_TXE))
+    {
+    }
 
-    // 4. wait until BSY flag clears (last bit fully clocked out)
-    while(SPI1->SR & SPI_SR_BSY);
+    while (SPI2->SR & SPI_SR_BSY)
+    {
+    }
 
-    // 5. dummy read DR to clear RXNE and prevent OVR flag
-    (void)(*((__IO uint8_t*)&SPI1->DR));
+    /* 4. Drain RXNE. Full duplex clocks a byte in for every byte out;
+     *    leaving it sets OVR, which then corrupts the next read. */
+    (void)(*((__IO uint8_t *)&SPI2->DR));
 }
 
 uint8_t spi_transfer(uint8_t data)
 {
-    // 1. wait until TXE flag is set in SR
-    while(!(SPI1->SR & SPI_SR_TXE));
+    while (!(SPI2->SR & SPI_SR_TXE))
+    {
+    }
 
-    // 2. write data to DR as 8-bit
-    *((__IO uint8_t*)&SPI1->DR) = data;
+    *((__IO uint8_t *)&SPI2->DR) = data;
 
-    // 3. wait until RXNE flag is set in SR (RX buffer has data)
-    while(!(SPI1->SR & SPI_SR_RXNE));
+    while (!(SPI2->SR & SPI_SR_RXNE))
+    {
+    }
 
-    // 4. return DR (received byte)
-    return (uint8_t)SPI1->DR;
+    return (uint8_t)(*((__IO uint8_t *)&SPI2->DR));
 }
 
 uint8_t spi_receive(void)
 {
-    // 1. call spi_transfer with 0xFF dummy byte and return result
-    return spi_transfer(0xFF);
+    /* 0xFF, not 0x00: SD cards read MOSI during a receive and a stream
+     * of zeroes can be mistaken for a command byte. */
+    return spi_transfer(0xFFU);
 }
 
 void spi_select_oled(void)
 {
-    // 1. pull PA4 low using BSRR (bits 16+n clear the pin)
-    GPIOA->BSRR = (1U << (4 + 16));
+    GPIOC->BSRR = (1U << (5 + 16));
 }
 
 void spi_deselect_oled(void)
 {
-    // 1. pull PA4 high using BSRR (bits 0+n set the pin)
-    GPIOA->BSRR = (1U << 4);
+    GPIOC->BSRR = (1U << 5);
 }
 
 void spi_select_sd(void)
 {
-    // 1. pull PB0 low using BSRR
-    GPIOB->BSRR = (1U << (0 + 16));
+    GPIOC->BSRR = (1U << (4 + 16));
 }
 
 void spi_deselect_sd(void)
 {
-    // 1. pull PB0 high using BSRR
-    GPIOB->BSRR = (1U << 0);
+    GPIOC->BSRR = (1U << 4);
 }

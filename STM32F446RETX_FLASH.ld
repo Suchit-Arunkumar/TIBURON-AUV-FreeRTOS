@@ -162,6 +162,20 @@ SECTIONS
     __bss_end__ = _ebss;
   } >RAM
 
+  /* Reset-surviving fault latch.
+     Placed after _ebss on purpose: startup_stm32f446retx.s zeroes only the
+     range [_sbss, _ebss], so anything here keeps its value across a warm
+     reset. Placed before _end so the newlib heap never grows into it. */
+  . = ALIGN(4);
+  .noinit (NOLOAD) :
+  {
+    _snoinit = .;
+    *(.noinit)
+    *(.noinit*)
+    . = ALIGN(4);
+    _enoinit = .;
+  } >RAM
+
   /* User_heap_stack section, used to check that there is enough "RAM" Ram  type memory left */
   ._user_heap_stack :
   {

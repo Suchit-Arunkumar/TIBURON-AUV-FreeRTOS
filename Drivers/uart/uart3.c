@@ -44,39 +44,42 @@
 	void uart3_init(void)
 	{
 		/*
-		 * 1. Enable GPIOB clock
+		 * 1. Enable GPIOC clock
+		 *
+		 * VN-200 moved from PB10/PB11 to PC10/PC11: PB10/PB11 are now
+		 * free, and PC10/PC11 were released when UART4 moved to PA0/PA1.
 		 */
-		RCC->AHB1ENR |= RCC_AHB1ENR_GPIOBEN;
+		RCC->AHB1ENR |= RCC_AHB1ENR_GPIOCEN;
 
 
 		/*
-		 * 2. Configure PB10 as alternate-function mode
-		 *    PB10 = USART3_TX
+		 * 2. Configure PC10 as alternate-function mode
+		 *    PC10 = USART3_TX (AF7)
 		 */
-		GPIOB->MODER &= ~(3U << (2U * 10U));
-		GPIOB->MODER |=  (2U << (2U * 10U));
+		GPIOC->MODER &= ~(3U << (2U * 10U));
+		GPIOC->MODER |=  (2U << (2U * 10U));
 
 
 		/*
-		 * 3. Configure PB11 as alternate-function mode
-		 *    PB11 = USART3_RX
+		 * 3. Configure PC11 as alternate-function mode
+		 *    PC11 = USART3_RX (AF7)
 		 */
-		GPIOB->MODER &= ~(3U << (2U * 11U));
-		GPIOB->MODER |=  (2U << (2U * 11U));
+		GPIOC->MODER &= ~(3U << (2U * 11U));
+		GPIOC->MODER |=  (2U << (2U * 11U));
 
 
 		/*
-		 * 4. Set PB10 alternate function to AF7
+		 * 4. Set PC10 alternate function to AF7
 		 */
-		GPIOB->AFR[1] &= ~(0xFU << 8U);
-		GPIOB->AFR[1] |=  (7U << 8U);
+		GPIOC->AFR[1] &= ~(0xFU << 8U);
+		GPIOC->AFR[1] |=  (7U << 8U);
 
 
 		/*
-		 * 5. Set PB11 alternate function to AF7
+		 * 5. Set PC11 alternate function to AF7
 		 */
-		GPIOB->AFR[1] &= ~(0xFU << 12U);
-		GPIOB->AFR[1] |=  (7U << 12U);
+		GPIOC->AFR[1] &= ~(0xFU << 12U);
+		GPIOC->AFR[1] |=  (7U << 12U);
 
 
 		/*
