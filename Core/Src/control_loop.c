@@ -101,6 +101,17 @@ static int      g_pwm_current[N_THR];
 static bool     g_armed     = false;
 static TickType_t last_cmd_tick = 0;
 
+/*
+ * Failsafe latch and recovery counter.
+ *
+ * g_in_failsafe is sticky: once the link is declared lost it stays set
+ * until CMD_RECOVERY_PACKETS consecutive CRC-valid packets have arrived.
+ * Without the latch, a single packet arriving inside the timeout window
+ * would silently re-arm the vehicle from one frame.
+ */
+static bool    g_in_failsafe    = true;   /* start disarmed and latched */
+static uint8_t g_recovery_count = 0;
+
 bool link_ok = false;
 
 // =============================================================================
@@ -126,12 +137,25 @@ static int thrust_to_pwm(float u)
 // =============================================================================
 // SECTION 6 — PUBLIC API
 // =============================================================================
+bool control_loop_in_failsafe(void)
+{
+    return g_in_failsafe;
+}
+
+uint8_t control_loop_recovery_count(void)
+{
+    return g_recovery_count;
+}
+
 void control_loop_init(void)
 {
     for (int i = 0; i < N_THR; i++) {
         g_pwm_current[i] = PWM_NEUTRAL;
         pwm_set_us((uint8_t)i, (uint16_t)PWM_NEUTRAL);
     }
+
+    g_in_failsafe    = true;
+    g_recovery_count = 0;
     memset(errInt,   0, sizeof(errInt));
     memset(errPrev,  0, sizeof(errPrev));
     memset(errState, 0, sizeof(errState));
@@ -170,10 +194,34 @@ void state_update(const StateEstimate *state)
 
 void target_update(const float new_target[N_DOF], bool arm_flag)
 {
+    /* Every CRC-valid packet refreshes the watchdog, whether or not it
+     * is allowed to move the setpoint yet. */
+    last_cmd_tick = xTaskGetTickCount();
+
+    if (g_in_failsafe)
+    {
+        if (g_recovery_count < CMD_RECOVERY_PACKETS)
+        {
+            g_recovery_count++;
+        }
+
+        if (g_recovery_count < CMD_RECOVERY_PACKETS)
+        {
+            /*
+             * Streak incomplete. Count it and nothing else - no setpoint,
+             * no arming. Thrusters stay at neutral.
+             */
+            return;
+        }
+
+        /* Streak complete: the link is real. Leave failsafe and take
+         * this packet's setpoint - never a cached pre-loss one. */
+        g_in_failsafe = false;
+    }
+
     memcpy(target, new_target, N_DOF * sizeof(float));
     g_armed       = arm_flag;
     link_ok       = true;
-    last_cmd_tick = xTaskGetTickCount();
 }
 
 // =============================================================================
@@ -280,8 +328,23 @@ void enterFailsafe(void)
     g_armed = false;
     link_ok = false;
 
+    g_in_failsafe    = true;
+    g_recovery_count = 0;
+
     for (int i = 0; i < N_DOF; i++)
         errInt[i] = errPrev[i] = errState[i] = U[i] = 0.0f;
+
+    /*
+     * Discard the setpoint as well as the integrator state.
+     *
+     * This is the rule that matters: a stale packet arriving after a long
+     * dropout must not re-apply the throttle the vehicle was carrying
+     * when the link died. With target zeroed, recovery starts from a
+     * stationary command, and applyPWM's PWM_RAMP_STEP slew then walks
+     * the outputs up from PWM_NEUTRAL at 2500 us/s rather than stepping.
+     */
+    for (int i = 0; i < N_DOF; i++)
+        target[i] = 0.0f;
 }
 
 // =============================================================================
@@ -289,8 +352,22 @@ void enterFailsafe(void)
 // =============================================================================
 void checkCommandTimeout(void)
 {
-    if (last_cmd_tick != 0 && (xTaskGetTickCount() - last_cmd_tick) > pdMS_TO_TICKS(CMD_TIMEOUT_MS)) {
-        enterFailsafe();
+    /*
+     * Evaluated from control_task every 20 ms, so it cannot be starved by
+     * a hung comms_task: the check lives on the deadline task, not on the
+     * task that parses packets.
+     *
+     * The guard on last_cmd_tick keeps a board that has never received a
+     * packet out of a permanent failsafe-trip loop; g_in_failsafe already
+     * starts true, so the vehicle is disarmed either way.
+     */
+    if (last_cmd_tick != 0 &&
+        (xTaskGetTickCount() - last_cmd_tick) > pdMS_TO_TICKS(CMD_TIMEOUT_MS))
+    {
+        if (!g_in_failsafe)
+        {
+            enterFailsafe();
+        }
     }
 }
 

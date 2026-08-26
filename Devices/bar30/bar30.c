@@ -16,48 +16,70 @@ static void delay_ms_simple(uint32_t ms)
         __NOP();
 }
 
-void bar30_init(void)
+I2C_Status bar30_init(void)
 {
     uint8_t cmd;
     uint8_t buf[2];
+    I2C_Status st;
 
     cmd = BAR30_RESET;
-    i2c_write(BAR30_ADDR , &cmd, 1);
+    st = i2c_write(BAR30_ADDR , &cmd, 1);
+
+    /* Nothing on the bus: fail out now rather than reading 8 PROM words
+     * of garbage and computing depth from it. */
+    if (st != I2C_OK)
+    {
+        return st;
+    }
 
     delay_ms_simple(10);
 
     for(int i = 0; i < 8; i++){
         cmd = BAR30_PROM + (i*2);
-        i2c_write(BAR30_ADDR , &cmd, 1);
-        i2c_read(BAR30_ADDR , buf, 2);
+
+        st = i2c_write(BAR30_ADDR , &cmd, 1);
+        if (st != I2C_OK) { return st; }
+
+        st = i2c_read(BAR30_ADDR , buf, 2);
+        if (st != I2C_OK) { return st; }
+
         prom[i] = (buf[0] << 8) | buf[1];
     }
+
+    return I2C_OK;
 }
 
-float bar30_read(void)
+I2C_Status bar30_read(float *out_depth_m)
 {
     uint8_t cmd;
+    I2C_Status st;
     uint8_t buf[3];
     uint32_t D1, D2;
     int32_t dT, TEMP;
     int64_t OFF, SENS, P;
 
     cmd = BAR30_CONV_D1;
-    i2c_write(BAR30_ADDR, &cmd, 1);
+    st = i2c_write(BAR30_ADDR, &cmd, 1);
+    if (st != I2C_OK) { return st; }
     delay_ms_simple(10);
 
     cmd = BAR30_ADC_READ;
-    i2c_write(BAR30_ADDR, &cmd, 1);
-    i2c_read(BAR30_ADDR, buf, 3);
+    st = i2c_write(BAR30_ADDR, &cmd, 1);
+    if (st != I2C_OK) { return st; }
+    st = i2c_read(BAR30_ADDR, buf, 3);
+    if (st != I2C_OK) { return st; }
     D1 = (buf[0] << 16) | (buf[1] << 8) | buf[2];
 
     cmd = BAR30_CONV_D2;
-    i2c_write(BAR30_ADDR, &cmd, 1);
+    st = i2c_write(BAR30_ADDR, &cmd, 1);
+    if (st != I2C_OK) { return st; }
     delay_ms_simple(10);
 
     cmd = BAR30_ADC_READ;
-    i2c_write(BAR30_ADDR, &cmd, 1);
-    i2c_read(BAR30_ADDR, buf, 3);
+    st = i2c_write(BAR30_ADDR, &cmd, 1);
+    if (st != I2C_OK) { return st; }
+    st = i2c_read(BAR30_ADDR, buf, 3);
+    if (st != I2C_OK) { return st; }
     D2 = (buf[0] << 16) | (buf[1] << 8) | buf[2];
 
     dT   = (int32_t)D2 - ((int32_t)prom[5] << 8);
@@ -74,5 +96,8 @@ float bar30_read(void)
      */
     (void)TEMP;
 
-    return (P - 101300.0f) / (1025.0f * 9.80665f);
+    /* Only now, with every transfer confirmed, publish a value. */
+    *out_depth_m = (P - 101300.0f) / (1025.0f * 9.80665f);
+
+    return I2C_OK;
 }
