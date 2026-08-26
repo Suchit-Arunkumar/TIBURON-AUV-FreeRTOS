@@ -2,7 +2,7 @@
 
 Register-level FreeRTOS firmware for an 8-thruster AUV on an STM32F446RE (Nucleo-64). No HAL, no CubeMX-generated init — every peripheral driver is hand-written against the reference manual. A migration of [Nucleo_AUV_Bare_Metal](https://github.com/Suchit-Arunkumar/Nucleo_AUV_Bare_Metal), which changed *scheduling and synchronisation* around the same drivers, then hardened them.
 
-> **Verification status, up front.** Everything here is compile-verified and statically analysed against a pinned `-O2` build. **Nothing in this document has been measured on hardware** — the target board and its sensors are not yet available. Every number is labelled `COMPUTED`, and [§13](#13-what-is-hardware-pending) lists exactly what remains unverified. See [`docs/HARDWARE_CHECKLIST.md`](docs/HARDWARE_CHECKLIST.md).
+> **Verification status, up front.** Everything here is compile-verified and statically analysed against a pinned `-O2` build. **Nothing in this document has been measured on hardware** — the target board and its sensors are not yet available. Every number is labelled `COMPUTED`, and [§14](#14-what-is-hardware-pending) lists exactly what remains unverified. See [`docs/HARDWARE_CHECKLIST.md`](docs/HARDWARE_CHECKLIST.md).
 
 ---
 
@@ -67,6 +67,15 @@ The single point of failure is TIM7 itself. If TIM7 stops, `control_task` stops 
 `configUSE_TIMERS` is **0**. `xTimerCreate` is called zero times, so the timer-service daemon was pure cost — 816 B of heap and a pinned priority 2 that collided with `logging_task`. Turning it off freed both.
 
 Three tasks share priority 4 with `configUSE_TIME_SLICING 1`, so they round-robin on each 1 ms tick. None can monopolise; each may wait up to 2 ms for its turn, against budgets of ≥10 ms.
+
+> **What "implemented" means for the controller.** The control loop's
+> *structure* is complete and runs end to end: error, clamped integral,
+> derivative, feedforward, per-axis saturation, and thrust allocation
+> through a pre-computed pseudo-inverse. **The PID gains are all zero**,
+> so the loop currently computes an identically zero command. Tuning
+> needs the vehicle in water, not the board. The complementary filter, by
+> contrast, is fully implemented — body-to-world rotation, gravity
+> compensation, strapdown integration, and per-sensor correction gates.
 
 **LD2 is a liveness indicator at the lowest priority.** That is a deliberate trade — it means the LED proves the *whole* schedule is running, not just the top of it — but it has a consequence worth stating: **a starved system and a crashed system look identical from the LED alone.** If the heartbeat stops, the console (`h`) and the fault latch are what distinguish them.
 
@@ -244,7 +253,7 @@ From `-fstack-usage` frames plus deepest call chains, plus **204 B** of context 
 
 Static analysis found `dummy_task` **overflowing** at its original 512 B (692 B required — certain even discounting the `vsnprintf` estimate: 128+144+96+204 = 572 > 512). It was grown to 1024 B. `spi_owner_task` and `logging_task` were at 93 % and 84 % from carrying a 520 B `SpiRequest` on the stack; both are now `static`, which does not touch the by-value queue decision.
 
-**No stack has been trimmed, and the evidence for that is concrete: `vn200_task` measured 33 % in Phase 9 and 54 % in Phase 10, purely from `console_printf` calls added one phase later — had it been trimmed to 512 B on the earlier number, it would now overflow.**
+**No stack has been trimmed, and the evidence for that is concrete: `vn200_task` computed at 33 % in Phase 9 and 54 % in Phase 10, purely from `console_printf` calls added one phase later — had it been trimmed to 512 B on the earlier number, it would now overflow.**
 
 ### MSP budget `COMPUTED`
 
@@ -343,11 +352,40 @@ The I²C wait is now **spin-then-yield**: 250 µs of spinning covers a healthy 9
 
 > **Varargs promote `float` to `double` unconditionally — that promotion is mandated by the language, so `-Wdouble-promotion` cannot flag it.** Every `%f` call site would quietly reintroduce soft-float double conversion into a codebase that is otherwise strictly single-precision on a single-precision FPU.
 
-Float formatting also costs ~100 B of stack per call, on the *caller's* stack, which is the least-measured part of the budget. `console_fmt_milli` takes a caller-supplied buffer on purpose: a shared one would make `console_printf("d=%s u=%s", fmt(a), fmt(b))` print one value twice, since argument evaluation order is unspecified — and that failure reads as a sensor fault, not a formatting fault.
+Float formatting also costs ~100 B of stack per call, on the *caller's* stack, which is the least-characterised part of the budget. `console_fmt_milli` takes a caller-supplied buffer on purpose: a shared one would make `console_printf("d=%s u=%s", fmt(a), fmt(b))` print one value twice, since argument evaluation order is unspecified — and that failure reads as a sensor fault, not a formatting fault.
 
 ---
 
-## 12. Bare-metal → RTOS: what changed
+## 12. Defects found by static analysis
+
+Every one of these was found by reading the map file, the `-fstack-usage`
+output, or the disassembly — not by running the board, which has not
+happened. They are listed because the method is the point: a target you
+cannot power is still a target you can analyse.
+
+| Defect | How it presented | How it was found |
+|---|---|---|
+| `PLLCFGR` written with `\|=` onto its reset values (PLLM=16, PLLN=192) | PLL configured out of spec — VCO input 0.33 MHz against a 0.95 MHz floor, so the output is undefined and lands near half the intended clock | Reading the reference manual's reset values against the code |
+| `RCC->CFGR` assigned twice; the second wiped `PPRE1` | APB1 left at HCLK, 36 MHz over its 45 MHz maximum | Same |
+| `HSE_VALUE` never defined anywhere | Fell through to ST's 25 MHz default; `SystemCoreClockUpdate()` would report 562.5 MHz, and FreeRTOS programs SysTick from it | Grep for the symbol after fixing the PLL |
+| Six pins claimed twice, later `_init()` silently winning | `printf` died the moment `oled_init()` ran; SPI1_MISO and TIM3_CH1 both broken by an `\|=` producing a nonexistent AF7 on PA6 | Cross-referencing every driver's pin config against the AF table |
+| `pwm_set_us()` ignored its `channel` argument | All 8 thrusters collapsed onto CCR1, last write winning | Reading the function |
+| `dummy_task` stack 180 B short | Would have overflowed on its first stack-audit print | `-fstack-usage` + call-chain summation |
+| Null-PSP window before `vTaskStartScheduler()` | An early UART byte pends PendSV, whose context save writes through PSP = 0 | Disassembling `PendSV_Handler` and `vPortStartFirstTask` |
+| Unbounded I²C polls | With no sensor attached, `bar30_task` spins forever at priority 4, starving priorities 1–3 while the board looks alive | Enumerating every `while (!(REG & flag))` and asking who controls completion |
+| `ring_buffer.c`: `rx_head` / `rx_tail` / `rx_count` **not** `volatile` | `rx_write()` runs in `USART1_IRQHandler` while `rx_avail()` / `rx_peek()` / `rx_eat()` run in `comms_task`. `rx_count` is read in the packet framing loop — exactly the shape a compiler is entitled to hoist. `uart3.c` and `uart4.c` had qualified their equivalents; this file had not | Systematic `volatile` audit of every cross-context variable |
+| `ring_buffer.c`: `rx_write()` called `__enable_irq()` unconditionally **from ISR context** | Re-enables interrupts regardless of the caller's state, breaking any critical section in effect further up the stack | Same audit — reading who calls the function, not just what it does |
+| SD busy timeout expressed as a loop count | ~110 ms against a 250 ms spec allowance, so a merely-slow card was reported as failed | Converting the loop count to time |
+| Slew limiter active on every armed tick | Capped control authority at 6.25 % of range per tick, invisible from outside and indistinguishable from mis-tuned gains | Reading `applyPWM` while checking a different claim |
+
+The last two `ring_buffer.c` entries are worth singling out: they were the
+only defects that a purely structural review would have missed. Finding
+them needed the question *"who executes this function, and who else
+touches what it touches"* rather than *"is this function correct"*.
+
+---
+
+## 13. Bare-metal → RTOS: what changed
 
 | | Bare-metal | FreeRTOS |
 |---|---|---|
@@ -366,7 +404,7 @@ The CRC field on a log record is named `crc16` for historical reasons but is **a
 
 ---
 
-## 13. What is hardware-pending
+## 14. What is hardware-pending
 
 **Nothing in this repository has been run on a board.** The target hardware (custom STM32H723 PCB, plus VN-200, Wayfinder DVL, Bar30 and thrusters) is not yet available, and the Nucleo-F446RE bench rig has no sensors attached.
 
@@ -382,6 +420,11 @@ The CRC field on a log record is named `crc16` for historical reasons but is **a
 | 13 — documentation | This file |
 | 14 — hardware checklist | [`docs/HARDWARE_CHECKLIST.md`](docs/HARDWARE_CHECKLIST.md) — 15 ordered points |
 
+**The controller is un-tuned.** All PID gains are zero. Everything around
+the gains — timing, allocation, saturation, failsafe, logging — is
+implemented and analysed; the gains themselves are a wet-testing task and
+are not claimed as done.
+
 **Known-weakest numbers**, both unresolvable without the board:
 
 - The **`vsnprintf` stack frame is estimated at ~120 B** and newlib-nano is often more. It appears in the chain of every task that can call `console_printf` on an error path, and `dummy_task` at 68 % has the least margin. The audit prints this caveat alongside the numbers so it cannot harden into a fact through repetition.
@@ -389,7 +432,7 @@ The CRC field on a log record is named `crc16` for historical reasons but is **a
 
 ---
 
-## 14. Building
+## 15. Building
 
 Import into STM32CubeIDE as an existing project. Any new folder under `Devices/` or `Drivers/` must have build inclusion checked: right-click → Resource Configurations → Exclude from Build → leave **unchecked**.
 
@@ -404,7 +447,7 @@ arm-none-eabi-gcc -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb \
 
 `-DHSE_VALUE=8000000U` matters: nothing in the tree defined it, so `system_stm32f4xx.c` fell through to ST's 25 MHz default and `SystemCoreClockUpdate()` would have reported 562.5 MHz.
 
-## 15. Console
+## 16. Console
 
 115200 8N1 on the ST-Link VCP. Single keypress commands:
 
