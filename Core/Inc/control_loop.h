@@ -50,6 +50,12 @@ uint32_t control_log_drops(void);
 
 void control_loop_get_pwm(uint16_t *out, uint8_t len);
 void control_loop_get_pose(float out[N_DOF]);
+
+/* Per-DOF PID output, surge..yaw, in the same units as U_MAX. */
+void control_loop_get_u(float out[N_DOF]);
+
+/* Allocation saturation: bit0 vertical, bit1 horizontal, bit2 yaw. */
+uint8_t control_loop_get_sat_flags(void);
 bool control_loop_get_armed(void);
 bool control_loop_get_link(void);
 
