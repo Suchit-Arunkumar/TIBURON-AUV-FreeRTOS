@@ -140,7 +140,9 @@ static void print_stack_audit(void)
         );
     }
 
-    console_printf("NOTE: lower bound - untaken branches are not counted");
+    console_printf("NOTE: lower bound - untaken branches not counted");
+    console_printf("NOTE: static predictions include an ESTIMATED newlib");
+    console_printf("      vsnprintf frame (~120B); treat as unverified");
     console_printf("--- END ---");
 }
 
