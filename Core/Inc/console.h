@@ -34,8 +34,38 @@
  * keep formats simple and to avoid %f.
  */
 
+/* ======================================================================
+ * NO FLOATING-POINT CONVERSIONS. %f, %e and %g DO NOT WORK HERE.
+ *
+ * The build links --specs=nano.specs without -u _printf_float, so the
+ * float formatting code is not present. A %f does not error, warn, or
+ * print a wrong number - it prints NOTHING, and the rest of the line
+ * silently goes with it. Verified absent from the ELF: no _printf_float
+ * symbol is linked.
+ *
+ * DECISION: fixed-point milli-units, not -u _printf_float. Reasons:
+ *
+ *   1. ~6 KB of flash for cosmetics on a diagnostic path.
+ *   2. Varargs promote float to double unconditionally - that promotion
+ *      is mandated by the language, so -Wdouble-promotion cannot flag
+ *      it. Every %f call site would quietly reintroduce soft-float
+ *      double conversion into a codebase that is otherwise strictly
+ *      single-precision on a single-precision FPU.
+ *   3. Float formatting costs another ~100 bytes of stack per call, on
+ *      the CALLER's stack, which is already the least-measured part of
+ *      the stack budget.
+ *   4. Milli-units suit the quantities: depth in mm, angles in
+ *      millidegrees, PID output in milli-units. Fixed width, and
+ *      trivially parsed from a captured log.
+ *
+ * Use console_fmt_milli() for any float, and print it with %s.
+ * ====================================================================== */
+
 #define CONSOLE_LINE_LEN    80
 #define CONSOLE_QUEUE_DEPTH 8
+
+/* Widest output is "-32768.999" plus NUL. */
+#define CONSOLE_MILLI_LEN   16
 
 typedef struct
 {
@@ -58,5 +88,18 @@ void console_printf(const char *fmt, ...) __attribute__((format(printf, 1, 2)));
 
 /* Lines dropped because consoleQueue was full, since boot. */
 uint32_t console_dropped(void);
+
+/*
+ * Render a float as a signed fixed-point string with three decimals,
+ * into a caller-supplied buffer of at least CONSOLE_MILLI_LEN bytes.
+ * Returns buf, so it drops straight into a %s argument:
+ *
+ *     char d[CONSOLE_MILLI_LEN];
+ *     console_printf("depth %s m", console_fmt_milli(d, sizeof(d), z));
+ *
+ * Handles the -0.5 case correctly, where the integer part is 0 but the
+ * value is negative and a naive split loses the sign.
+ */
+const char *console_fmt_milli(char *buf, uint32_t buflen, float v);
 
 #endif /* CONSOLE_H */
