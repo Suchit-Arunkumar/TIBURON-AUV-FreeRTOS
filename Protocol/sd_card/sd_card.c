@@ -3,6 +3,7 @@
 
 #include "FreeRTOS.h"
 #include "task.h"
+#include "timer_timebase.h"
 
 #include <stddef.h>
 
@@ -54,14 +55,24 @@
 #define SD_BUSY_POLL_INTERVAL_MS   1U
 
 /*
- * Pre-scheduler fallback bound.
+ * Pre-scheduler waits are bounded by TIM2's free-running microsecond
+ * counter, not by a loop count.
  *
- * Only reachable if a block operation is ever called from main before the
- * scheduler starts. It is not today - sd_init() does not use the busy
- * wait - so this exists to fail safe rather than hang, and its duration
- * is deliberately approximate.
+ * The tick-based path below is only valid once the scheduler is running:
+ * before vTaskStartScheduler(), xTickCount is 0 and never advances, so a
+ * tick deadline could never expire, and vTaskDelay() has no scheduler to
+ * return from. Every wait here therefore branches on
+ * xTaskGetSchedulerState().
+ *
+ * sd_init() does not currently reach these helpers - it uses only
+ * sd_send_cmd's bounded retry loop - but sd_read_block() would if it were
+ * ever called from main to read a config block, and the previous
+ * fallback was an unquantified 200000-iteration spin. micros() gives the
+ * pre-scheduler path the same real-time bound as the post-scheduler one.
+ *
+ * timer2_timebase_init() must therefore run BEFORE sd_init() in main.
  */
-#define SD_PRESCHED_SPIN_LIMIT     200000UL
+#define SD_US_PER_MS               1000UL
 
 static int (*sd_card_detect)(void) = NULL;
 
@@ -89,6 +100,35 @@ const char *sd_status_str(SD_Status s)
  * Wait for the card to release DO (return 0xFF). Returns SD_OK if it did
  * so within timeout_ms, SD_ERR_IO otherwise.
  */
+/*
+ * Poll `probe` until it returns 1, or timeout_ms elapses.
+ *
+ * Post-scheduler: tick-timed, yielding 1 ms between polls so the wait
+ * cannot starve the tasks below the bus owner.
+ * Pre-scheduler: TIM2 microsecond counter, bounded spin - there is no
+ * scheduler to yield to, and nothing else is running anyway.
+ */
+static SD_Status sd_wait_presched(uint8_t token, uint32_t timeout_ms)
+{
+    uint32_t start   = micros();
+    uint32_t budget  = timeout_ms * SD_US_PER_MS;
+
+    for (;;)
+    {
+        if (spi_receive() == token)
+        {
+            return SD_OK;
+        }
+
+        /* Unsigned wraparound makes this correct across TIM2's 32-bit
+         * rollover, which happens every ~71.6 minutes at 1 MHz. */
+        if ((micros() - start) >= budget)
+        {
+            return SD_ERR_IO;
+        }
+    }
+}
+
 static SD_Status sd_wait_ready(uint32_t timeout_ms)
 {
     if (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING)
@@ -112,16 +152,7 @@ static SD_Status sd_wait_ready(uint32_t timeout_ms)
         }
     }
 
-    /* No tick source yet - bounded spin, see the comment above. */
-    for (uint32_t i = 0; i < SD_PRESCHED_SPIN_LIMIT; i++)
-    {
-        if (spi_receive() == 0xFF)
-        {
-            return SD_OK;
-        }
-    }
-
-    return SD_ERR_IO;
+    return sd_wait_presched(0xFF, timeout_ms);
 }
 
 /* Wait for a specific token rather than for not-busy. Same tick-based
@@ -149,15 +180,7 @@ static SD_Status sd_wait_token(uint8_t token, uint32_t timeout_ms)
         }
     }
 
-    for (uint32_t i = 0; i < SD_PRESCHED_SPIN_LIMIT; i++)
-    {
-        if (spi_receive() == token)
-        {
-            return SD_OK;
-        }
-    }
-
-    return SD_ERR_IO;
+    return sd_wait_presched(token, timeout_ms);
 }
 
 static void sd_delay(void)

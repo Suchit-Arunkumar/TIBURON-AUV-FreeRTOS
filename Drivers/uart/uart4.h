@@ -17,4 +17,8 @@ uint16_t uart4_read(
     uint16_t max_len
 );
 
+/* Enable the NVIC line. Call from the consuming task's first
+ * iteration, never from main - see the note in the .c file. */
+void uart4_irq_enable(void);
+
 #endif

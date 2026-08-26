@@ -30,6 +30,13 @@
 #define IWDG_PR_DIV64     4U
 #define IWDG_RELOAD_1S    500U
 
+/*
+ * Freeze the IWDG counter while the core is halted by a debugger.
+ * Unconditional and independent of ENABLE_IWDG - see the comment in
+ * iwdg.c. Call once, early in main.
+ */
+void iwdg_freeze_on_halt(void);
+
 void iwdg_init(void);
 void iwdg_kick(void);
 

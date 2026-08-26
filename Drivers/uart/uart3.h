@@ -17,4 +17,8 @@ void uart3_init(void);
 uint16_t uart3_read(uint8_t *out, uint16_t max_len);
 extern TaskHandle_t vn200TaskHandle;
 
+/* Enable the NVIC line. Call from the consuming task's first
+ * iteration, never from main - see the note in the .c file. */
+void uart3_irq_enable(void);
+
 #endif

@@ -90,7 +90,7 @@ void uart1_init(void)
 
 	 // 14. enable USART1 interrupt in NVIC
 	 NVIC_SetPriority(USART1_IRQn, 5);
-	 NVIC_EnableIRQ(USART1_IRQn);
+	 /* NVIC_EnableIRQ deferred to uart1_irq_enable() - see below. */
 
 }
 
@@ -180,4 +180,28 @@ void uart1_write_byte(uint8_t b)
     }
 
     USART1->DR = b;
+}
+
+/*
+ * B6-class hazard, second half.
+ *
+ * Configuring the peripheral and ENABLING its NVIC line are now separate.
+ * Between the last xTaskCreate and vTaskStartScheduler(), pxCurrentTCB is
+ * populated but PSP is still zero - vPortSVCHandler sets it, and that
+ * only runs inside vPortStartFirstTask. An interrupt in that window that
+ * reached portYIELD_FROM_ISR would pend PendSV, and PendSV's context save
+ * does `mrs r0, PSP` then `stmdb r0!, {...}` - writing through a null
+ * stack pointer.
+ *
+ * From vTaskStartScheduler() onward the window is closed by the kernel:
+ * tasks.c does portDISABLE_INTERRUPTS() (BASEPRI = 0x50) before
+ * xPortStartScheduler(), which masks every interrupt in this design
+ * (0x50 and 0x60) until vPortSVCHandler clears BASEPRI with a task
+ * running. So enabling the line from inside the consuming task's first
+ * iteration means no kernel API is reachable from any ISR until a task
+ * context genuinely exists.
+ */
+void uart1_irq_enable(void)
+{
+    NVIC_EnableIRQ(USART1_IRQn);
 }
