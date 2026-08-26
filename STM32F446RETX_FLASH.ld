@@ -39,6 +39,37 @@ ENTRY(Reset_Handler)
 _estack = ORIGIN(RAM) + LENGTH(RAM); /* end of "RAM" Ram type memory */
 
 _Min_Heap_Size = 0x200; /* required amount of heap */
+/*
+ * MSP budget - COMPUTED, NOT HARDWARE VALIDATED.
+ *
+ * FreeRTOS runs tasks on PSP and handler bodies on MSP. A first exception
+ * taken from thread mode pushes its hardware frame to PSP; only NESTED
+ * exceptions push theirs to MSP. This 0x400 must therefore cover the
+ * deepest legal nest chain.
+ *
+ * Nesting is permitted by these priorities (raw IPR):
+ *     0x50  TIM7, USART1        may preempt 0x60 and 0xF0
+ *     0x60  USART2/3, UART4     may preempt 0xF0
+ *     0xF0  SysTick, PendSV     preemptible by both
+ * Same-priority peers cannot nest, so the chain is at most 3 deep:
+ *
+ *     L1  SysTick or PendSV                            8 B
+ *     L2  USART3/UART4   hw frame 104+4 + handler 72  180 B
+ *     L3  USART1         hw frame 104+4 + handler 64  172 B
+ *                                                     -----
+ *                                                     360 B  of 1024
+ *
+ * L1 contributes only 8 B because SysTick_Handler pushes {r3,lr} and
+ * PendSV_Handler pushes {r0,r3} and both then set BASEPRI=0x50, which
+ * masks every interrupt in this design. xTaskIncrementTick (48 B) and
+ * vTaskSwitchContext (16 B) are therefore unreachable from a nest chain.
+ *
+ * Hardware frames are budgeted at 104 B (32 B core + 72 B FP context
+ * reserved by lazy stacking) plus 4 B of STKALIGN padding.
+ *
+ * 664 B spare; 468 B used even with a terminal HardFault stacked on top.
+ * Recheck this if any ISR priority changes or a handler grows.
+ */
 _Min_Stack_Size = 0x400; /* required amount of stack */
 
 /* Memories definition */

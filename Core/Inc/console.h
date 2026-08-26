@@ -99,6 +99,16 @@ uint32_t console_dropped(void);
  *
  * Handles the -0.5 case correctly, where the integer part is 0 but the
  * value is negative and a naive split loses the sign.
+ *
+ * The buffer is CALLER-SUPPLIED on purpose. A static or single shared
+ * buffer would make this:
+ *
+ *     console_printf("d=%s u=%s", fmt(depth), fmt(u));   // BROKEN
+ *
+ * print the same value twice - argument evaluation order is unspecified,
+ * so both calls would write the one buffer before printf read either.
+ * That failure reads as a sensor fault, not a formatting fault, which is
+ * the worst kind to debug. Two values need two buffers.
  */
 const char *console_fmt_milli(char *buf, uint32_t buflen, float v);
 
