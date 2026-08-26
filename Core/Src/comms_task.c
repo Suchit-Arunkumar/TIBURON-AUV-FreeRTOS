@@ -1,4 +1,5 @@
 #include "comms_task.h"
+#include "uart_packet.h"
 #include "packet.h"
 #include "uart_packet.h"
 #include "control_loop.h"
@@ -10,6 +11,14 @@ QueueHandle_t commandQueue = NULL;
 void comms_task(void *argument)
 {
     (void)argument;
+
+    /*
+     * Enable USART1's interrupt here, not in main. The scheduler is
+     * running and this handle is populated, so the ISR's
+     * xTaskNotifyFromISR / portYIELD_FROM_ISR pair is safe. See the note
+     * in uart_packet.c.
+     */
+    uart1_irq_enable();
 
     for (;;)
     {

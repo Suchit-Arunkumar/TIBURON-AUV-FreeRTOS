@@ -37,7 +37,7 @@
 #define PWM_MIN         1100
 #define PWM_MAX         1900
 #define PWM_NEUTRAL     1500
-#define PWM_RAMP_STEP   50          // µs per tick at 50 Hz → 2500 µs/s slew
+#define PWM_RAMP_STEP   50          // us/tick at 50 Hz -> 2500 us/s, RECOVERY ONLY
 
 #define CMD_TIMEOUT_MS  500u        // ms before failsafe triggers
 
@@ -112,6 +112,17 @@ static TickType_t last_cmd_tick = 0;
 static bool    g_in_failsafe    = true;   /* start disarmed and latched */
 static uint8_t g_recovery_count = 0;
 
+/*
+ * Slew limiter, active only while ramping out of neutral.
+ *
+ * Set whenever the outputs are forced to neutral - boot, or any failsafe
+ * trip - and cleared on the first tick where no output needed clamping,
+ * i.e. the moment the thrusters have caught up with what the PID is
+ * asking for. From then on the controller has full authority and a step
+ * command is a step.
+ */
+static bool g_ramping = true;
+
 bool link_ok = false;
 
 // =============================================================================
@@ -142,6 +153,11 @@ bool control_loop_in_failsafe(void)
     return g_in_failsafe;
 }
 
+bool control_loop_ramping(void)
+{
+    return g_ramping;
+}
+
 uint8_t control_loop_recovery_count(void)
 {
     return g_recovery_count;
@@ -156,6 +172,8 @@ void control_loop_init(void)
 
     g_in_failsafe    = true;
     g_recovery_count = 0;
+    g_ramping        = true;
+
     memset(errInt,   0, sizeof(errInt));
     memset(errPrev,  0, sizeof(errPrev));
     memset(errState, 0, sizeof(errState));
@@ -301,22 +319,60 @@ void computeAllocation(void)
 // =============================================================================
 void applyPWM(void)
 {
+    /* Set if ANY channel had to be clamped this tick. */
+    bool clamped_any = false;
+
     for (int i = 0; i < N_THR; i++) {
         if (!g_armed) {
             g_pwm_current[i] = PWM_NEUTRAL;
         } else {
             float thrust   = (i == 0) ? -T_out[i] : T_out[i];
             int target_pwm = thrust_to_pwm(thrust);
-            int delta      = target_pwm - g_pwm_current[i];
-            if      (delta >  PWM_RAMP_STEP) delta =  PWM_RAMP_STEP;
-            else if (delta < -PWM_RAMP_STEP) delta = -PWM_RAMP_STEP;
-            g_pwm_current[i] += delta;
+
+            if (g_ramping) {
+                /*
+                 * Recovery ramp ONLY. Walk towards the commanded value at
+                 * PWM_RAMP_STEP per tick, so the thrusters come up from
+                 * neutral smoothly after a failsafe trip or at boot.
+                 */
+                int delta = target_pwm - g_pwm_current[i];
+
+                if (delta > PWM_RAMP_STEP) {
+                    delta = PWM_RAMP_STEP;
+                    clamped_any = true;
+                } else if (delta < -PWM_RAMP_STEP) {
+                    delta = -PWM_RAMP_STEP;
+                    clamped_any = true;
+                }
+
+                g_pwm_current[i] += delta;
+            } else {
+                /*
+                 * Normal operation: the PID gets full authority.
+                 *
+                 * This limiter used to run on EVERY armed tick, capping
+                 * the loop at 6.25% of full range per tick - a full-scale
+                 * reversal took 320 ms. That is invisible from the
+                 * outside and presents as badly tuned gains.
+                 */
+                g_pwm_current[i] = target_pwm;
+            }
 
             if      (g_pwm_current[i] > PWM_MAX) g_pwm_current[i] = PWM_MAX;
             else if (g_pwm_current[i] < PWM_MIN) g_pwm_current[i] = PWM_MIN;
         }
 
         pwm_set_us((uint8_t)i, (uint16_t)g_pwm_current[i]);
+    }
+
+    /*
+     * The ramp is complete once a whole pass needed no clamping - every
+     * thruster has caught up with its commanded value. Only meaningful
+     * while armed; a disarmed vehicle sits at neutral and stays ramping,
+     * which is what we want for the next arming.
+     */
+    if (g_ramping && g_armed && !clamped_any) {
+        g_ramping = false;
     }
 }
 
@@ -330,6 +386,10 @@ void enterFailsafe(void)
 
     g_in_failsafe    = true;
     g_recovery_count = 0;
+
+    /* Outputs are about to be forced to neutral, so the next arming must
+     * walk them back up rather than step. */
+    g_ramping = true;
 
     for (int i = 0; i < N_DOF; i++)
         errInt[i] = errPrev[i] = errState[i] = U[i] = 0.0f;

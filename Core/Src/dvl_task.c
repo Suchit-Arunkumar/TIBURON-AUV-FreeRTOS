@@ -37,6 +37,9 @@ void dvl_task(void *argument)
 
     uint8_t rx_data[128];
 
+    /* Enable UART4's interrupt now that a task context exists. */
+    uart4_irq_enable();
+
     uint32_t silent_cycles = 0;
     uint8_t  announced     = 0;
 
