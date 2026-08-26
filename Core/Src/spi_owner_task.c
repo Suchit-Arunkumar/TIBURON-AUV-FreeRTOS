@@ -23,8 +23,9 @@
 
 QueueHandle_t spiRequestQueue = NULL;
 
-static uint32_t sd_write_count = 0;
-static uint32_t sd_error_count = 0;
+/* Written by spi_owner_task, read by dummy_task's health report. */
+static volatile uint32_t sd_write_count = 0;
+static volatile uint32_t sd_error_count = 0;
 
 uint32_t spi_owner_sd_writes(void) { return sd_write_count; }
 uint32_t spi_owner_sd_errors(void) { return sd_error_count; }

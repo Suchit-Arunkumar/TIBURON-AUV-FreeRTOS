@@ -97,9 +97,30 @@ static float errInt[N_DOF]   = {0};
 static float U[N_DOF]        = {0};
 static float T_out[N_THR]    = {0};
 
-static int      g_pwm_current[N_THR];
-static bool     g_armed     = false;
-static TickType_t last_cmd_tick = 0;
+
+/*
+ * VOLATILE POLICY (Phase 12 audit).
+ *
+ * Anything written in one execution context and read in another is
+ * volatile. Note honestly what that does and does not buy here: every
+ * cross-context read below goes through a non-inlined accessor in a
+ * DIFFERENT translation unit, and LTO is off, so the compiler already
+ * cannot cache these across the call. No live miscompilation was found.
+ *
+ * volatile is added because the guarantee should come from the
+ * declaration rather than from the accident of where the function lives -
+ * enabling -flto, or moving an accessor into a header as static inline,
+ * would silently remove the protection otherwise.
+ */
+
+/* Read by comms_task (telemetry) and spi_owner_task (OLED). */
+static volatile bool       g_armed       = false;
+
+/* control_task only: written by target_update, read by
+ * checkCommandTimeout, both in the same call chain. Not cross-context. */
+static TickType_t          last_cmd_tick = 0;
+
+static int                 g_pwm_current[N_THR];
 
 /*
  * Failsafe latch and recovery counter.
@@ -109,8 +130,18 @@ static TickType_t last_cmd_tick = 0;
  * Without the latch, a single packet arriving inside the timeout window
  * would silently re-arm the vehicle from one frame.
  */
-static bool    g_in_failsafe    = true;   /* start disarmed and latched */
-static uint8_t g_recovery_count = 0;
+/*
+ * Both written only by control_task (target_update / enterFailsafe) and
+ * by control_loop_init pre-scheduler; read by dummy_task's health report.
+ *
+ * The 3-packet streak deliberately lives HERE and not in comms_task.
+ * comms_task parses packets and posts to commandQueue; it never touches
+ * the streak. So there is no read-modify-write split across two
+ * priorities - the increment, the compare and the reset all happen in
+ * control_task.
+ */
+static volatile bool    g_in_failsafe    = true;
+static volatile uint8_t g_recovery_count = 0;
 
 /*
  * Slew limiter, active only while ramping out of neutral.
@@ -121,9 +152,10 @@ static uint8_t g_recovery_count = 0;
  * asking for. From then on the controller has full authority and a step
  * command is a step.
  */
-static bool g_ramping = true;
+static volatile bool g_ramping = true;
 
-bool link_ok = false;
+/* Written by control_task; read by comms_task and spi_owner_task. */
+volatile bool link_ok = false;
 
 // =============================================================================
 // SECTION 5 — INTERNAL HELPERS
@@ -489,7 +521,7 @@ bool control_loop_get_link(void)
  * certainly the bus owner stuck in a long SD program cycle. Reported
  * over the console rather than inferred from gaps in the data.
  */
-static uint32_t log_drop_count = 0;
+static volatile uint32_t log_drop_count = 0;
 
 uint32_t control_log_drops(void)
 {
