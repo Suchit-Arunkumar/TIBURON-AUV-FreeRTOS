@@ -1,25 +1,39 @@
 #include <stdio.h>
 #include "stm32f446xx.h"
 #include "i2c.h"
+#include "timer_timebase.h"
+
+#include "FreeRTOS.h"
+#include "task.h"
 
 #define APB1CLK_MHZ  45U
 
 /*
- * Wait budget for every flag poll.
+ * Wait strategy: spin briefly, then yield.
  *
- * One I2C byte at 100 kHz is ~90 us, and the slowest single wait here is
- * an address phase at ~90 us. At 180 MHz a poll iteration is a load, a
- * test and a branch over an APB1 bridge - call it ~20 core cycles, so
- * ~0.11 us. 20000 iterations is therefore roughly 2.2 ms: about 24 byte
- * times, generous for a healthy bus and immediate on a dead one.
+ * A single I2C phase at 100 kHz takes ~90 us. Spinning for that is
+ * cheaper than a context switch, so the FAST PATH is a bounded spin of
+ * I2C_SPIN_US - a healthy transfer never leaves it and pays nothing.
  *
- * Deliberately a loop count and not a tick count, unlike the SD busy
- * wait: i2c1_init() and bar30_init() both run before the scheduler
- * exists, so there is no tick to read. The consequence of the estimate
- * being off is a timeout somewhere between 1 ms and 5 ms, which changes
- * nothing about the outcome - the device is either there or it is not.
+ * Beyond that the bus is misbehaving, and the SLOW PATH yields 1 ms
+ * between polls. This is the fix for the Phase 11 residual risk: every
+ * wait used to spin for its whole budget, so one failed read cost ~6 x
+ * 2.2 ms = ~13 ms of solid CPU at priority 4. A sensor that is cleanly
+ * absent was survivable because bar30_task backs off to 1 s, but a
+ * sensor that NACKs INTERMITTENTLY - far more likely on jumper wires to
+ * a breakout - kept the 20 ms period and would have held priority 4 at
+ * roughly 65% duty, starving logging, the SPI owner and the console.
+ *
+ * Timing comes from TIM2's free-running microsecond counter, so the
+ * budget means what it says regardless of optimisation level, and the
+ * unsigned subtraction is correct across TIM2's ~71.6-minute rollover.
+ *
+ * The scheduler-state split matters because i2c1_init() may run before
+ * the scheduler; vTaskDelay() there would have no scheduler to return
+ * from.
  */
-#define I2C_WAIT_ITERATIONS   20000UL
+#define I2C_SPIN_US       250UL    /* fast path: ~2.7 byte times   */
+#define I2C_TIMEOUT_US   2500UL    /* total budget: ~28 byte times */
 
 const char *i2c_status_str(I2C_Status s)
 {
@@ -35,23 +49,55 @@ const char *i2c_status_str(I2C_Status s)
     }
 }
 
-/* Returns 1 if the flag appeared within budget, 0 on timeout. Also aborts
- * early on AF (acknowledge failure), which is how a missing device
- * announces itself rather than by simply never responding. */
+/* One poll. 1 = flag set, 0 = keep waiting, -1 = NACKed, give up now. */
+static int32_t poll_once(volatile uint32_t *reg, uint32_t flag)
+{
+    if (*reg & flag)
+    {
+        return 1;
+    }
+
+    if (I2C1->SR1 & I2C_SR1_AF)
+    {
+        /* A missing device announces itself with AF rather than by
+         * simply never responding. Clear it so the next transfer starts
+         * clean. */
+        I2C1->SR1 &= ~I2C_SR1_AF;
+        return -1;
+    }
+
+    return 0;
+}
+
+/* Returns 1 if the flag appeared within budget, 0 on timeout or NACK. */
 static uint32_t wait_flag(volatile uint32_t *reg, uint32_t flag)
 {
-    for (uint32_t i = 0; i < I2C_WAIT_ITERATIONS; i++)
-    {
-        if (*reg & flag)
-        {
-            return 1UL;
-        }
+    uint32_t start = micros();
 
-        if (I2C1->SR1 & I2C_SR1_AF)
+    /* --- fast path: spin. A healthy bus finishes here. --- */
+    do
+    {
+        int32_t r = poll_once(reg, flag);
+
+        if (r == 1)  { return 1UL; }
+        if (r == -1) { return 0UL; }
+
+    } while ((micros() - start) < I2C_SPIN_US);
+
+    /* --- slow path: the bus is not behaving. Stop hogging the CPU. --- */
+    uint32_t can_yield =
+        (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING) ? 1UL : 0UL;
+
+    while ((micros() - start) < I2C_TIMEOUT_US)
+    {
+        int32_t r = poll_once(reg, flag);
+
+        if (r == 1)  { return 1UL; }
+        if (r == -1) { return 0UL; }
+
+        if (can_yield)
         {
-            /* Clear AF so the next transfer starts clean. */
-            I2C1->SR1 &= ~I2C_SR1_AF;
-            return 0UL;
+            vTaskDelay(pdMS_TO_TICKS(1));
         }
     }
 

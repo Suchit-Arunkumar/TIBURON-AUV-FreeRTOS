@@ -8,6 +8,33 @@
 TaskHandle_t commsTaskHandle = NULL;
 QueueHandle_t commandQueue = NULL;
 
+/*
+ * Commands parsed successfully but not delivered to control_task.
+ *
+ * This was the one silent-loss path left in the Phase 11 queue analysis:
+ * every other drop site had a counter, so a full commandQueue was the
+ * only way to lose data with no diagnostic. Non-zero here means
+ * control_task is not draining - it should consume one per 20 ms tick,
+ * so a depth-4 queue only fills if the control loop has stalled.
+ *
+ * Written by comms_task, read by dummy_task's health report.
+ */
+static volatile uint32_t cmd_drop_count = 0;
+
+/* CRC-valid packets received since boot. Monotonic; the recovery streak
+ * itself is owned entirely by control_task. */
+static volatile uint32_t cmd_valid_count = 0;
+
+uint32_t comms_cmd_drops(void)
+{
+    return cmd_drop_count;
+}
+
+uint32_t comms_cmd_valid(void)
+{
+    return cmd_valid_count;
+}
+
 void comms_task(void *argument)
 {
     (void)argument;
@@ -38,11 +65,22 @@ void comms_task(void *argument)
 
             if (packet_parse_cmd(&cmd))
             {
-                xQueueSend(
-                    commandQueue,
-                    &cmd,
-                    pdMS_TO_TICKS(1)
-                );
+                cmd_valid_count++;
+
+                /*
+                 * Short bounded wait, then drop and count. Blocking
+                 * longer would back up the RX path behind a stalled
+                 * control loop, and the newest command is always the one
+                 * worth having.
+                 */
+                if (xQueueSend(
+                        commandQueue,
+                        &cmd,
+                        pdMS_TO_TICKS(1)
+                    ) != pdPASS)
+                {
+                    cmd_drop_count++;
+                }
             }
         }
 

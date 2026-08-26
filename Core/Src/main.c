@@ -169,6 +169,12 @@ static void print_health(void)
                    control_loop_get_armed() ? 1 : 0,
                    (unsigned)control_loop_recovery_count(),
                    (unsigned)CMD_RECOVERY_PACKETS);
+    console_printf("cmd pkts  : %lu valid, %lu dropped (queue full)",
+                   (unsigned long)comms_cmd_valid(),
+                   (unsigned long)comms_cmd_drops());
+    console_printf("wdg/ramp  : IWDG=%s  slew_limit=%s",
+                   iwdg_is_enabled() ? "ARMED" : "DISABLED",
+                   control_loop_ramping() ? "ramping" : "off (full authority)");
     console_printf("sd blocks : %lu ok, %lu err",
                    (unsigned long)spi_owner_sd_writes(),
                    (unsigned long)spi_owner_sd_errors());
@@ -262,42 +268,77 @@ static void dummy_task(void *argument)
         }
 
         /*
-         * Heartbeat.
+         * Heartbeat - three distinguishable states, readable across the
+         * room with no console at all.
          *
-         * A healthy 180 MHz board from the HSE gives a steady 1 Hz blink.
-         * When the HSE was dead and the clock fell back to the HSI PLL,
-         * the console may be unreadable - HSI is only about 1% accurate
-         * at room temperature and worse across range, which is enough to
-         * corrupt 115200 framing. So the fallback gets a visually
-         * distinct double-pulse instead: blink-blink-pause, once a
-         * second, readable across the room with no UART at all.
+         *   steady 1 Hz      clock OK from HSE, watchdog ARMED. Nominal.
+         *   double-pulse     clock fell back to the HSI PLL. Still
+         *                    180 MHz, but HSI is only ~1% accurate at
+         *                    room temperature and worse across range,
+         *                    which can corrupt 115200 framing - so the
+         *                    console that would have reported it may be
+         *                    unreadable. Highest severity, wins.
+         *   short blip       watchdog NOT compiled in. This is the
+         *                    default bench build, and a build with no
+         *                    watchdog must never be mistakable for one
+         *                    with it: a hung control loop will not reset
+         *                    the board or stop the thrusters.
+         *
+         * A fatal clock status never reaches here - main halts in
+         * clock_fault_blink_forever() before the scheduler starts.
          */
-        if (g_clock_status == CLOCK_DEGRADED_HSI_PLL)
         {
-            /* 80 ms, 80 ms, 80 ms, then rest to fill 1000 ms. */
-            static const TickType_t pattern[4] = { 80, 80, 80, 760 };
+            static const TickType_t pat_degraded[4] = {  80,  80,  80, 760 };
+            static const TickType_t pat_no_wdg[2]   = {  60, 1940 };
 
-            if ((now - last_blink) >= pdMS_TO_TICKS(pattern[blink_phase]))
+            const TickType_t *pattern;
+            uint8_t phase_count;
+            uint8_t off_phase;
+
+            if (g_clock_status == CLOCK_DEGRADED_HSI_PLL)
             {
-                last_blink = now;
-                blink_phase = (uint8_t)((blink_phase + 1U) & 0x3U);
+                pattern     = pat_degraded;
+                phase_count = 4U;
+                off_phase   = 3U;
+            }
+            else if (!iwdg_is_enabled())
+            {
+                pattern     = pat_no_wdg;
+                phase_count = 2U;
+                off_phase   = 1U;
+            }
+            else
+            {
+                pattern     = NULL;
+                phase_count = 0U;
+                off_phase   = 0U;
+            }
 
-                if (blink_phase == 3U)
+            if (pattern == NULL)
+            {
+                /* Nominal: symmetric 1 Hz. */
+                if ((now - last_blink) >= pdMS_TO_TICKS(500))
                 {
-                    GPIOA->BSRR = (1U << (5 + 16));   /* off during rest */
-                }
-                else
-                {
+                    last_blink = now;
                     GPIOA->ODR ^= (1U << 5);
                 }
             }
-        }
-        else
-        {
-            if ((now - last_blink) >= pdMS_TO_TICKS(500))
+            else
             {
-                last_blink = now;
-                GPIOA->ODR ^= (1U << 5);
+                if ((now - last_blink) >= pdMS_TO_TICKS(pattern[blink_phase]))
+                {
+                    last_blink  = now;
+                    blink_phase = (uint8_t)((blink_phase + 1U) % phase_count);
+
+                    if (blink_phase == off_phase)
+                    {
+                        GPIOA->BSRR = (1U << (5 + 16));   /* dark for the rest */
+                    }
+                    else
+                    {
+                        GPIOA->ODR ^= (1U << 5);
+                    }
+                }
             }
         }
     }
@@ -554,6 +595,20 @@ int main(void)
      * control_task.
      */
     iwdg_init();
+
+    if (iwdg_is_enabled())
+    {
+        printf("IWDG: ENABLED (~1 s, kicked by control_task only)\r\n");
+    }
+    else
+    {
+        printf("**********************************************\r\n");
+        printf("*  IWDG DISABLED - BENCH BUILD               *\r\n");
+        printf("*  No watchdog. A hung control loop will NOT  *\r\n");
+        printf("*  reset the board or stop the thrusters.     *\r\n");
+        printf("*  Uncomment ENABLE_IWDG in iwdg.h to arm.    *\r\n");
+        printf("**********************************************\r\n");
+    }
 
 
     /*

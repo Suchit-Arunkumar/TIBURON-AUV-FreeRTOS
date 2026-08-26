@@ -34,9 +34,10 @@ static uint16_t staged_count = 0;
 static uint32_t block_seq    = 0;
 static uint32_t first_ts     = 0;
 
-static uint32_t blocks_emitted   = 0;
-static uint32_t records_staged   = 0;
-static uint32_t spi_post_drops   = 0;
+/* Written by logging_task, read by dummy_task's health report. */
+static volatile uint32_t blocks_emitted   = 0;
+static volatile uint32_t records_staged   = 0;
+static volatile uint32_t spi_post_drops   = 0;
 
 uint32_t logging_blocks_emitted(void)  { return blocks_emitted; }
 uint32_t logging_records_staged(void)  { return records_staged; }
