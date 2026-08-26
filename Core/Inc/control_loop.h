@@ -20,6 +20,15 @@
 #define PWM_RAMP_STEP   50      /* µs per 50 Hz tick → 2500 µs/s slew rate  */
 #define CMD_TIMEOUT_MS  500u    /* ms without a valid CMD before failsafe     */
 
+/*
+ * Recovery after a comms loss requires this many CONSECUTIVE CRC-valid
+ * packets. One good packet after a dropout is not evidence of a restored
+ * link - it may be the only one that got through, or a stale frame that
+ * was buffered somewhere along the way. Three in a row at the Pi's send
+ * rate is real.
+ */
+#define CMD_RECOVERY_PACKETS  3u
+
 extern bool link_ok;
 extern QueueHandle_t stateQueue;
 
@@ -36,7 +45,27 @@ void control_loop_init(void);
 void control_loop_tick(void);
 
 void state_update(const StateEstimate *state);
+
+/*
+ * Accept a new setpoint from a CRC-valid command packet.
+ *
+ * While in failsafe, the first CMD_RECOVERY_PACKETS-1 calls only count
+ * towards recovery and do NOT move the setpoint or re-arm. The packet
+ * that completes the streak becomes the active setpoint.
+ *
+ * A setpoint from before the dropout is never restored: enterFailsafe()
+ * zeroes the target, and the ramp in applyPWM() then walks the thrusters
+ * up from neutral rather than stepping to whatever the vehicle was doing
+ * when the link died.
+ */
 void target_update(const float new_target[N_DOF], bool arm_flag);
+
+/* True while the failsafe latch is engaged and recovery is incomplete. */
+bool control_loop_in_failsafe(void);
+
+/* Consecutive CRC-valid packets seen since the last loss, saturating at
+ * CMD_RECOVERY_PACKETS. For the console health report. */
+uint8_t control_loop_recovery_count(void);
 
 void enterFailsafe(void);
 
