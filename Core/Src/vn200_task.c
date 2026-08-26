@@ -38,6 +38,9 @@ void vn200_task(void *argument)
 
     uint8_t rx_data[64];
 
+    /* Enable USART3's interrupt now that a task context exists. */
+    uart3_irq_enable();
+
     uint32_t silent_cycles = 0;
     uint8_t  announced     = 0;
 

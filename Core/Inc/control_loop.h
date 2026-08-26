@@ -17,7 +17,20 @@
 #define PWM_MIN         1100
 #define PWM_MAX         1900
 #define PWM_NEUTRAL     1500
-#define PWM_RAMP_STEP   50      /* µs per 50 Hz tick → 2500 µs/s slew rate  */
+/*
+ * Slew limit, applied ONLY while ramping out of failsafe.
+ *
+ * 50 us per 20 ms tick is 2500 us/s. Against the 800 us band that is
+ * 6.25% of full range per tick: a full-scale reversal takes 16 ticks
+ * (320 ms) and neutral to full takes 8 ticks (160 ms).
+ *
+ * That is the right behaviour when recovering from a comms loss - the
+ * vehicle should walk up from neutral, not step - and the WRONG
+ * behaviour in normal closed-loop operation, where it silently caps
+ * control authority and looks exactly like badly tuned gains. It used to
+ * be applied on every armed tick; see control_loop_ramping().
+ */
+#define PWM_RAMP_STEP   50      /* us per 50 Hz tick -> 2500 us/s slew rate */
 #define CMD_TIMEOUT_MS  500u    /* ms without a valid CMD before failsafe     */
 
 /*
@@ -62,6 +75,13 @@ void target_update(const float new_target[N_DOF], bool arm_flag);
 
 /* True while the failsafe latch is engaged and recovery is incomplete. */
 bool control_loop_in_failsafe(void);
+
+/*
+ * True while the post-recovery slew limiter is still active. Clears on
+ * the first tick where every output reached its commanded value without
+ * being clamped, after which the PID has full authority.
+ */
+bool control_loop_ramping(void);
 
 /* Consecutive CRC-valid packets seen since the last loss, saturating at
  * CMD_RECOVERY_PACKETS. For the console health report. */

@@ -428,6 +428,16 @@ int main(void)
         (0x5FAUL << SCB_AIRCR_VECTKEY_Pos) |
         (3UL << SCB_AIRCR_PRIGROUP_Pos);
 
+    /*
+     * Freeze the IWDG counter whenever the debugger halts the core.
+     * Unconditional, deliberately NOT behind ENABLE_IWDG: the IWDG cannot
+     * be stopped once started and does not halt with the core, so without
+     * this every breakpoint becomes a reset a second later. No effect on
+     * a free-running board, and a conditional version would be missing
+     * from exactly the build being debugged.
+     */
+    iwdg_freeze_on_halt();
+
 
     /*
      * 3. Initialize the LD2 heartbeat LED on PA5.
@@ -479,7 +489,19 @@ int main(void)
 
 
     /*
-     * 8. Initialize SD card.
+     * 8. Microsecond timebase.
+     *
+     * Placed before the SD card: sd_card.c bounds its PRE-SCHEDULER waits
+     * with micros(), because the tick-based path is only valid once the
+     * scheduler is running. Before that, xTickCount is 0 and never
+     * advances, so a tick deadline could never expire, and vTaskDelay()
+     * has no scheduler to return from.
+     */
+    timer2_timebase_init();
+
+
+    /*
+     * 9. Initialize SD card.
      */
     SD_Status sd_status =
         sd_init();
@@ -488,13 +510,13 @@ int main(void)
 
 
     /*
-     * 9. Initialize I2C1.
+     * 10. Initialize I2C1.
      */
     i2c1_init();
 
 
     /*
-     * 10. Initialize OLED.
+     * 11. Initialize OLED.
      */
     oled_init();
 
@@ -508,19 +530,13 @@ int main(void)
 
 
     /*
-     * 11. Initialize all eight thruster PWM outputs.
+     * 12. Initialize all eight thruster PWM outputs.
      *
      * TIM3 CH1-4 + TIM8 CH1-4, every channel written to 1500 us before
      * any output stage is enabled, counters running. The ESCs arm during
      * the remainder of boot.
      */
     pwm_init();
-
-
-    /*
-     * 12. Initialize microsecond timebase.
-     */
-    timer2_timebase_init();
 
 
     /*
@@ -699,30 +715,36 @@ int main(void)
 
 
     /*
-     * LAST BEFORE THE SCHEDULER: enable the interrupt-driven UARTs.
+     * LAST BEFORE THE SCHEDULER: CONFIGURE the interrupt-driven UARTs.
      *
-     * Deliberately after every xTaskCreate. Each of these three enables a
-     * DMA + IDLE interrupt whose handler notifies a task handle:
+     * Configure only. Each NVIC line is enabled by its CONSUMING TASK, on
+     * that task's first iteration:
      *
-     *     USART1 -> commsTaskHandle
-     *     USART3 -> vn200TaskHandle
-     *     UART4  -> dvlTaskHandle
+     *     USART1 -> commsTaskHandle  -> uart1_irq_enable() in comms_task
+     *     USART3 -> vn200TaskHandle  -> uart3_irq_enable() in vn200_task
+     *     UART4  -> dvlTaskHandle    -> uart4_irq_enable() in dvl_task
      *
-     * Enabling them earlier - as this used to - left a window in which a
-     * byte arriving from an already-powered peer would reach a NULL
-     * handle. USART3 and UART4 guarded against it and USART1 was fixed to
-     * match in B5, but a guard is a way of surviving a bad ordering, not
-     * a substitute for a good one. Created first, then enabled, means the
-     * window does not exist.
+     * Enabling the lines here would fix the NULL-handle problem and leave
+     * the harder half. Between the last xTaskCreate and
+     * vTaskStartScheduler(), pxCurrentTCB is populated but PSP is still
+     * ZERO - vPortSVCHandler sets it, and that only runs inside
+     * vPortStartFirstTask. An ISR reaching portYIELD_FROM_ISR in that
+     * window pends PendSV, whose context save does 'mrs r0, PSP' then
+     * 'stmdb r0!, {...}': a write through a null stack pointer. Same
+     * defect class as B6.
      *
-     * The scheduler is not running yet, so the notifies these can now
-     * produce simply mark the target task ready before it first runs.
+     * Deferring each enable to its task closes that window completely.
+     * From vTaskStartScheduler() onward the kernel closes it too -
+     * tasks.c calls portDISABLE_INTERRUPTS() (BASEPRI = 0x50) before
+     * xPortStartScheduler(), masking every interrupt in this design
+     * (0x50 and 0x60) until vPortSVCHandler clears BASEPRI with a task
+     * genuinely running.
      */
     uart1_init();   /* Pi link      */
     uart3_init();   /* VN-200       */
     uart4_init();   /* Wayfinder DVL */
 
-    printf("UARTS UP\r\n");
+    printf("UARTS CONFIGURED (IRQs enabled by their tasks)\r\n");
 
 
     /*
