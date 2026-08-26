@@ -45,6 +45,7 @@
 #include "logging_task.h"
 #include "spi_owner_task.h"
 #include "console.h"
+#include "sensor_status.h"
 
 
 //===========================================================================================================================
@@ -159,6 +160,15 @@ static void print_health(void)
                    (unsigned long)control_log_drops());
     console_printf("con drops : %lu lines",
                    (unsigned long)console_dropped());
+    console_printf("sensors   : VN200=%s DVL=%s Bar30=%s",
+                   sensor_state_str(g_vn200_state),
+                   sensor_state_str(g_dvl_state),
+                   sensor_state_str(g_bar30_state));
+    console_printf("link      : %s  armed=%d  recovery=%u/%u",
+                   control_loop_in_failsafe() ? "FAILSAFE" : "ok",
+                   control_loop_get_armed() ? 1 : 0,
+                   (unsigned)control_loop_recovery_count(),
+                   (unsigned)CMD_RECOVERY_PACKETS);
     console_printf("sd blocks : %lu ok, %lu err",
                    (unsigned long)spi_owner_sd_writes(),
                    (unsigned long)spi_owner_sd_errors());
@@ -406,7 +416,21 @@ int main(void)
 
 
     /*
-     * 2. Initialize the LD2 heartbeat LED on PA5.
+     * 2. NVIC priority grouping: 4 bits of preemption, 0 of subpriority.
+     *
+     * Before ANY NVIC_SetPriority call, so every priority written later
+     * is interpreted the way it was meant. PRIGROUP does not alter stored
+     * IPR bytes, only how the core splits them, but setting it first
+     * removes the question entirely. All-preemption is what FreeRTOS
+     * expects.
+     */
+    SCB->AIRCR =
+        (0x5FAUL << SCB_AIRCR_VECTKEY_Pos) |
+        (3UL << SCB_AIRCR_PRIGROUP_Pos);
+
+
+    /*
+     * 3. Initialize the LD2 heartbeat LED on PA5.
      *
      * PA5 is genuinely a GPIO again — the SPI bus moved to SPI2 on
      * PB13/14/15, so nothing steals this pin later in init any more.
@@ -418,7 +442,7 @@ int main(void)
 
 
     /*
-     * 3. Initialize UART2 for debug output.
+     * 4. Initialize UART2 for debug output.
      */
     uart2_init();
 
@@ -427,7 +451,7 @@ int main(void)
 
 
     /*
-     * 3b. Report and clear any fault latched by the previous run.
+     * 5. Report and clear any fault latched by the previous run.
      *
      * Deliberately placed here: the VCP is up so this is printable, and
      * nothing that could fault again has run yet. Prints nothing when no
@@ -437,13 +461,13 @@ int main(void)
 
 
     /*
-     * 4. Initialize hardware CRC.
+     * 6. Initialize hardware CRC.
      */
     crc_init();
 
 
     /*
-     * 5. Initialize SPI2 (OLED + SD card).
+     * 7. Initialize SPI2 (OLED + SD card).
      *
      * ADC and DAC init used to sit here. Both were dead code — nothing
      * ever called adc_read() or dac_write() — and both claimed pins the
@@ -470,13 +494,7 @@ int main(void)
 
 
     /*
-     * 10. Initialize Bar30.
-     */
-    bar30_init();
-
-
-    /*
-     * 11. Initialize OLED.
+     * 10. Initialize OLED.
      */
     oled_init();
 
@@ -490,44 +508,7 @@ int main(void)
 
 
     /*
-     * 12. Initialize USART1.
-     *
-     * USART1:
-     *     DMA RX
-     *     IDLE interrupt
-     *     Raspberry Pi communications
-     */
-    uart1_init();
-
-    uart2_write_str(
-        "UART1 initialized\r\n"
-    );
-
-
-    /*
-     * 13. Initialize USART3.
-     *
-     * USART3:
-     *     DMA RX
-     *     IDLE interrupt
-     *     VN-200
-     */
-    uart3_init();
-
-
-    /*
-     * 14. Initialize UART4.
-     *
-     * UART4:
-     *     DMA RX
-     *     IDLE interrupt
-     *     Wayfinder DVL
-     */
-    uart4_init();
-
-
-    /*
-     * 15. Initialize all eight thruster PWM outputs.
+     * 11. Initialize all eight thruster PWM outputs.
      *
      * TIM3 CH1-4 + TIM8 CH1-4, every channel written to 1500 us before
      * any output stage is enabled, counters running. The ESCs arm during
@@ -537,27 +518,19 @@ int main(void)
 
 
     /*
-     * 16. Initialize microsecond timebase.
+     * 12. Initialize microsecond timebase.
      */
     timer2_timebase_init();
 
 
     /*
-     * 17. Configure NVIC priority grouping.
-     */
-    SCB->AIRCR =
-        (0x5FAUL << SCB_AIRCR_VECTKEY_Pos) |
-        (3UL << SCB_AIRCR_PRIGROUP_Pos);
-
-
-    /*
-     * 18. Initialize control-loop state.
+     * 13. Initialize control-loop state.
      */
     control_loop_init();
 
 
     /*
-     * 19. Start the independent watchdog.
+     * 14. Start the independent watchdog.
      *
      * Compiles to nothing unless ENABLE_IWDG is defined in iwdg.h, which
      * it is not by default. Started last among the peripherals so the
@@ -579,7 +552,7 @@ int main(void)
 
 
     /*
-     * 20. Initialize queues.
+     * 15. Initialize queues.
      */
 
     commandQueue =
@@ -696,7 +669,7 @@ int main(void)
 
 
     /*
-     * 21. Create the application tasks.
+     * 16. Create the application tasks.
      *
      * Priority scheme (configMAX_PRIORITIES = 8, so 7 is the top):
      *
@@ -726,7 +699,34 @@ int main(void)
 
 
     /*
-     * 26. Start FreeRTOS scheduler.
+     * LAST BEFORE THE SCHEDULER: enable the interrupt-driven UARTs.
+     *
+     * Deliberately after every xTaskCreate. Each of these three enables a
+     * DMA + IDLE interrupt whose handler notifies a task handle:
+     *
+     *     USART1 -> commsTaskHandle
+     *     USART3 -> vn200TaskHandle
+     *     UART4  -> dvlTaskHandle
+     *
+     * Enabling them earlier - as this used to - left a window in which a
+     * byte arriving from an already-powered peer would reach a NULL
+     * handle. USART3 and UART4 guarded against it and USART1 was fixed to
+     * match in B5, but a guard is a way of surviving a bad ordering, not
+     * a substitute for a good one. Created first, then enabled, means the
+     * window does not exist.
+     *
+     * The scheduler is not running yet, so the notifies these can now
+     * produce simply mark the target task ready before it first runs.
+     */
+    uart1_init();   /* Pi link      */
+    uart3_init();   /* VN-200       */
+    uart4_init();   /* Wayfinder DVL */
+
+    printf("UARTS UP\r\n");
+
+
+    /*
+     * 17. Start FreeRTOS scheduler.
      */
     vTaskStartScheduler();
 
