@@ -92,8 +92,37 @@ void comms_task(void *argument)
 
             memset(&telemetry, 0, sizeof(telemetry));
 
-            telemetry.armed = control_loop_get_armed();
+            telemetry.armed   = control_loop_get_armed();
             telemetry.link_ok = control_loop_get_link();
+
+            /*
+             * D11: these were memset to zero and never filled, so the Pi
+             * saw a telemetry frame that was structurally valid and
+             * substantively empty.
+             *
+             * depth_m is the FUSED depth from the state estimate, which
+             * is what the controller is actually acting on.
+             *
+             * raw_depth_m stays reserved and zero: it is the unfiltered
+             * Bar30 reading, and control_task never sees it - bar30_task
+             * publishes into bar30Queue and filter_task consumes it.
+             * Surfacing it would mean a second queue purely for
+             * telemetry, which is not worth it until someone needs to
+             * debug the filter against its own input.
+             */
+            float pose_now[N_DOF];
+            float u_now[N_DOF];
+
+            control_loop_get_pose(pose_now);
+            control_loop_get_u(u_now);
+
+            telemetry.depth_m   = pose_now[2];
+            telemetry.sat_flags = control_loop_get_sat_flags();
+
+            for (int i = 0; i < N_DOF; i++)
+            {
+                telemetry.pid_u[i] = u_now[i];
+            }
 
             /*
              * TelemetryPayload is __packed__, so esc_pwm is not

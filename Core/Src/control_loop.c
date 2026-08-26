@@ -154,6 +154,18 @@ static volatile uint8_t g_recovery_count = 0;
  */
 static volatile bool g_ramping = true;
 
+/*
+ * Allocation saturation, one bit per axis group, latched each tick by
+ * computeAllocation(). bit0 vertical, bit1 horizontal, bit2 yaw.
+ *
+ * Set when the requested thrust vector could not be produced without
+ * scaling, i.e. the controller is asking for more than the thrusters can
+ * deliver. Telemetry carries it so the Pi can tell "the PID is wrong"
+ * from "the PID is right and the vehicle is out of authority" - two
+ * failures that look identical from pose error alone.
+ */
+static volatile uint8_t g_sat_flags = 0;
+
 /* Written by control_task; read by comms_task and spi_owner_task. */
 volatile bool link_ok = false;
 
@@ -321,23 +333,33 @@ void computeAllocation(void)
         T_vert[i]  = B_pinv[i][2]*U[2] + B_pinv[i][3]*U[3] + B_pinv[i][4]*U[4];
     }
 
+    uint8_t sat = 0U;
+
     float maxV = 0.0f;
     for (int i = 0; i < 4; i++)
         if (fabsf(T_vert[i]) > maxV) maxV = fabsf(T_vert[i]);
-    if (maxV > 1.0f)
+    if (maxV > 1.0f) {
         for (int i = 0; i < 4; i++) T_vert[i] /= maxV;
+        sat |= (1U << 0);
+    }
 
     float maxTn = 0.0f;
     for (int i = 4; i < N_THR; i++)
         if (fabsf(T_trans[i]) > maxTn) maxTn = fabsf(T_trans[i]);
-    if (maxTn > 1.0f)
+    if (maxTn > 1.0f) {
         for (int i = 4; i < N_THR; i++) T_trans[i] /= maxTn;
+        sat |= (1U << 1);
+    }
 
     float maxY = 0.0f;
     for (int i = 4; i < N_THR; i++)
         if (fabsf(T_yaw[i]) > maxY) maxY = fabsf(T_yaw[i]);
-    if (maxY > 1.0f)
+    if (maxY > 1.0f) {
         for (int i = 4; i < N_THR; i++) T_yaw[i] /= maxY;
+        sat |= (1U << 2);
+    }
+
+    g_sat_flags = sat;
 
     for (int i = 0; i < N_THR; i++) {
         T_out[i] = (i < 4) ? T_vert[i] : (T_trans[i] + T_yaw[i]);
@@ -463,6 +485,21 @@ void checkCommandTimeout(void)
     }
 }
 
+
+uint8_t control_loop_get_sat_flags(void)
+{
+    return g_sat_flags;
+}
+
+void control_loop_get_u(float out[N_DOF])
+{
+    if (out == NULL)
+    {
+        return;
+    }
+
+    memcpy(out, U, N_DOF * sizeof(float));
+}
 
 void control_loop_get_pose(float out[N_DOF])
 {
