@@ -18,6 +18,7 @@
  * which is still fast enough to notice it being plugged in.
  */
 #define BAR30_ABSENT_PERIOD_MS   1000U
+#define BAR30_SLOW_PERIOD_MS      100U
 #define BAR30_ABSENT_FAILURES       5U
 
 /* Attempt a bus recovery after this many consecutive failures, in case a
@@ -114,9 +115,35 @@ void bar30_task(void *argument)
              */
         }
 
-        TickType_t period = (g_bar30_state == SENSOR_OK)
-                          ? pdMS_TO_TICKS(BAR30_TASK_PERIOD_MS)
-                          : pdMS_TO_TICKS(BAR30_ABSENT_PERIOD_MS);
+        /*
+         * Back off on consecutive FAILURES, not merely on a confirmed
+         * absent sensor.
+         *
+         * The dangerous case is not a cleanly missing device - that is
+         * declared absent after 5 tries and drops to a 1 s period. It is
+         * a device that NACKs intermittently, which on jumper wires to a
+         * breakout is the common failure. Keying the period on
+         * g_bar30_state alone left such a device at the full 20 ms
+         * period, retrying at 50 Hz and paying an I2C timeout each time.
+         *
+         * One failure is enough to slow to 100 ms. Combined with the
+         * yielding wait in i2c.c, worst-case duty at priority 4 drops
+         * from roughly 65% to under 2%.
+         */
+        TickType_t period;
+
+        if (consecutive_fail == 0U)
+        {
+            period = pdMS_TO_TICKS(BAR30_TASK_PERIOD_MS);
+        }
+        else if (consecutive_fail < BAR30_ABSENT_FAILURES)
+        {
+            period = pdMS_TO_TICKS(BAR30_SLOW_PERIOD_MS);
+        }
+        else
+        {
+            period = pdMS_TO_TICKS(BAR30_ABSENT_PERIOD_MS);
+        }
 
         vTaskDelayUntil(&last_wake, period);
     }

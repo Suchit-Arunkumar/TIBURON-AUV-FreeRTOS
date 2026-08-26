@@ -40,4 +40,22 @@ void iwdg_freeze_on_halt(void);
 void iwdg_init(void);
 void iwdg_kick(void);
 
+/*
+ * 1 when this build has the watchdog compiled in.
+ *
+ * The default is OFF, which is right for bench work and wrong for
+ * anything in the water. A build with no watchdog must never be
+ * mistakable for one with it: main prints a banner line and dummy_task
+ * uses a distinct LD2 pattern, so the state is visible both on the
+ * console and across the room.
+ */
+static inline int iwdg_is_enabled(void)
+{
+#ifdef ENABLE_IWDG
+    return 1;
+#else
+    return 0;
+#endif
+}
+
 #endif

@@ -42,7 +42,7 @@
  */
 #define CMD_RECOVERY_PACKETS  3u
 
-extern bool link_ok;
+extern volatile bool link_ok;
 extern QueueHandle_t stateQueue;
 
 /* Log records dropped because logQueue was full. */
