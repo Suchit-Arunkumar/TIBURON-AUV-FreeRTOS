@@ -43,3 +43,36 @@ uint32_t console_dropped(void)
 {
     return console_drop_count;
 }
+
+const char *console_fmt_milli(char *buf, uint32_t buflen, float v)
+{
+    if ((buf == NULL) || (buflen == 0U))
+    {
+        return "";
+    }
+
+    /* Round half away from zero, then split. Working in integer
+     * milli-units from here on keeps the rest of this integer-only. */
+    float scaled = v * 1000.0f;
+    int32_t milli = (int32_t)(scaled + ((v >= 0.0f) ? 0.5f : -0.5f));
+
+    int32_t whole = milli / 1000;
+    int32_t frac  = milli % 1000;
+
+    if (frac < 0)
+    {
+        frac = -frac;
+    }
+
+    /*
+     * When |v| < 1 and v is negative, whole is 0 and carries no sign, so
+     * "%ld.%03ld" would render -0.5 as "0.500". Prefix the sign
+     * explicitly in exactly that case.
+     */
+    const char *sign = ((milli < 0) && (whole == 0)) ? "-" : "";
+
+    (void)snprintf(buf, (size_t)buflen, "%s%ld.%03ld",
+                   sign, (long)whole, (long)frac);
+
+    return buf;
+}

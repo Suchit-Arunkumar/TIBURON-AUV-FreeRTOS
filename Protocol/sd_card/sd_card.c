@@ -1,6 +1,9 @@
 #include "sd_card.h"
 #include "spi.h"
 
+#include "FreeRTOS.h"
+#include "task.h"
+
 #include <stddef.h>
 
 /*
@@ -12,30 +15,53 @@
  * commit on a generic Class 10 card is 2-3 ms; the worst case is reached
  * when the card runs internal wear-levelling mid-write.
  *
- * The previous code capped the busy poll at 100000 loop iterations. At
- * SPI_BR_SD_DATA that is roughly 110 ms of real time - LESS THAN HALF the
- * spec allowance - so a card that was merely slow got reported as failed.
+ * TIMED AGAINST THE SCHEDULER TICK, not a loop count.
  *
- * This is expressed in polls derived from the byte time so the meaning
- * survives a change of SPI clock, rather than as a bare loop count.
+ * Two earlier versions of this were loop counts. The first was a bare
+ * 100000 iterations - about 110 ms, less than half the allowance, so a
+ * merely-slow card was reported as failed. The second derived the count
+ * from an estimated 1.822 us per poll, of which 0.40 us was a COMPUTED
+ * driver overhead: if the true figure is 0.25 or 0.60 us, that "250 ms"
+ * is really 229 ms or 275 ms, and 229 ms fails a card the specification
+ * says must be tolerated. A loop count is also at the mercy of what the
+ * optimiser does to the loop body.
+ *
+ * xTaskGetTickCount() is ground truth and immune to both. The only
+ * caller of the block operations is spi_owner_task, which runs
+ * post-scheduler, so the tick is always available there.
  */
 #define SD_WRITE_TIMEOUT_MS        250U
 #define SD_READ_TIMEOUT_MS         100U
 
 /*
- * One busy poll clocks one byte: 8/f_SCK plus ~0.4 us of polled driver
- * overhead. At SPI_BR_SD_DATA (5.625 MHz) that is 1.422 + 0.40 = 1.822 us.
+ * Yield between polls instead of spinning.
  *
- * Expressed in ns and divided out, so the timeout means the wall-clock
- * duration it claims to. Using a rounded 1 us instead would stretch a
- * 250 ms budget to 455 ms of real bus hold on a dead card - which is the
- * exact number the Phase 8 worst-case analysis quotes, so it has to be
- * right rather than merely conservative.
+ * Spinning held the CPU at priority 3 for the entire wait. Control
+ * (7) and the sensor tasks (4-6) preempt regardless, so the 50 Hz
+ * deadline was never at risk - but everything BELOW the bus owner was
+ * starved for up to 250 ms: consoleQueue stopped draining and the LD2
+ * heartbeat froze, silencing diagnostics at precisely the moment
+ * something worth diagnosing was happening.
  *
- * If SPI_BR_SD_DATA is raised to SPI_BR_DIV4, update this to 1111.
+ * A 1 ms delay costs no useful latency. The card is not ready; polling it
+ * 137000 times instead of 250 does not make it ready sooner, and the
+ * typical 2-3 ms commit still completes in 2-3 polls.
+ *
+ * The chip select stays asserted across the delay, which is correct - SD
+ * signals busy on DO with CS low. Nothing else can touch the bus meanwhile
+ * because this task owns it structurally.
  */
-#define SD_POLL_NS                 1822U
-#define SD_TIMEOUT_POLLS(ms)       (((ms) * 1000000UL) / SD_POLL_NS)
+#define SD_BUSY_POLL_INTERVAL_MS   1U
+
+/*
+ * Pre-scheduler fallback bound.
+ *
+ * Only reachable if a block operation is ever called from main before the
+ * scheduler starts. It is not today - sd_init() does not use the busy
+ * wait - so this exists to fail safe rather than hang, and its duration
+ * is deliberately approximate.
+ */
+#define SD_PRESCHED_SPIN_LIMIT     200000UL
 
 static int (*sd_card_detect)(void) = NULL;
 
@@ -57,6 +83,81 @@ const char *sd_status_str(SD_Status s)
         case SD_ERR_CD_ABSENT:      return "card-detect: slot empty";
         default:                    return "unknown";
     }
+}
+
+/*
+ * Wait for the card to release DO (return 0xFF). Returns SD_OK if it did
+ * so within timeout_ms, SD_ERR_IO otherwise.
+ */
+static SD_Status sd_wait_ready(uint32_t timeout_ms)
+{
+    if (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING)
+    {
+        TickType_t start  = xTaskGetTickCount();
+        TickType_t budget = pdMS_TO_TICKS(timeout_ms);
+
+        for (;;)
+        {
+            if (spi_receive() == 0xFF)
+            {
+                return SD_OK;
+            }
+
+            if ((xTaskGetTickCount() - start) >= budget)
+            {
+                return SD_ERR_IO;
+            }
+
+            vTaskDelay(pdMS_TO_TICKS(SD_BUSY_POLL_INTERVAL_MS));
+        }
+    }
+
+    /* No tick source yet - bounded spin, see the comment above. */
+    for (uint32_t i = 0; i < SD_PRESCHED_SPIN_LIMIT; i++)
+    {
+        if (spi_receive() == 0xFF)
+        {
+            return SD_OK;
+        }
+    }
+
+    return SD_ERR_IO;
+}
+
+/* Wait for a specific token rather than for not-busy. Same tick-based
+ * budget and the same yield rationale. */
+static SD_Status sd_wait_token(uint8_t token, uint32_t timeout_ms)
+{
+    if (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING)
+    {
+        TickType_t start  = xTaskGetTickCount();
+        TickType_t budget = pdMS_TO_TICKS(timeout_ms);
+
+        for (;;)
+        {
+            if (spi_receive() == token)
+            {
+                return SD_OK;
+            }
+
+            if ((xTaskGetTickCount() - start) >= budget)
+            {
+                return SD_ERR_IO;
+            }
+
+            vTaskDelay(pdMS_TO_TICKS(SD_BUSY_POLL_INTERVAL_MS));
+        }
+    }
+
+    for (uint32_t i = 0; i < SD_PRESCHED_SPIN_LIMIT; i++)
+    {
+        if (spi_receive() == token)
+        {
+            return SD_OK;
+        }
+    }
+
+    return SD_ERR_IO;
 }
 
 static void sd_delay(void)
@@ -186,7 +287,6 @@ SD_Status sd_init(void)
 SD_Status sd_write_block(uint32_t block_addr, const uint8_t *data)
 {
     uint8_t r1;
-    uint32_t timeout;
 
     // SDSC cards need byte addressing
     // block_addr *= 512;
@@ -230,31 +330,20 @@ SD_Status sd_write_block(uint32_t block_addr, const uint8_t *data)
     }
 
     /*
-     * Wait out the card's internal program cycle. Now sized to the
-     * specification's 250 ms allowance instead of the previous ~110 ms,
-     * which failed slow-but-healthy cards.
+     * Wait out the card's internal program cycle: tick-timed, yielding
+     * between polls. See SD_WRITE_TIMEOUT_MS above.
      */
-    timeout = SD_TIMEOUT_POLLS(SD_WRITE_TIMEOUT_MS);
-
-    while (--timeout)
-    {
-        if (spi_receive() == 0xFF)
-            break;
-    }
+    SD_Status busy = sd_wait_ready(SD_WRITE_TIMEOUT_MS);
 
     spi_deselect_sd();
     spi_transmit(0xFF);
 
-    if (timeout == 0)
-        return SD_ERR_IO;
-
-    return SD_OK;
+    return busy;
 }
 
 SD_Status sd_read_block(uint32_t block_addr, uint8_t *buf)
 {
     uint8_t r1;
-    uint32_t timeout;
 
     // SDSC cards require byte addressing
     // block_addr *= 512;
@@ -272,15 +361,7 @@ SD_Status sd_read_block(uint32_t block_addr, uint8_t *buf)
     }
 
     // 2. Wait for start token 0xFE
-    timeout = SD_TIMEOUT_POLLS(SD_READ_TIMEOUT_MS);
-
-    while (--timeout)
-    {
-        if (spi_receive() == 0xFE)
-            break;
-    }
-
-    if (timeout == 0)
+    if (sd_wait_token(0xFE, SD_READ_TIMEOUT_MS) != SD_OK)
     {
         spi_deselect_sd();
         spi_transmit(0xFF);
