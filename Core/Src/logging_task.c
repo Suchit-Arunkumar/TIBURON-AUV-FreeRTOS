@@ -71,7 +71,12 @@ static void staging_flush(void)
 
     memcpy(staging, &header, sizeof(header));
 
-    SpiRequest req;
+    /*
+     * P9: static for the same reason as spi_owner_task's copy - a
+     * 520-byte stack local put this task at 84% of its allocation.
+     * staging_flush is only ever called from logging_task.
+     */
+    static SpiRequest req;
 
     req.type       = SPI_REQ_SD_BLOCK;
     req.block_addr = sd_logger_block_for_seq(block_seq);

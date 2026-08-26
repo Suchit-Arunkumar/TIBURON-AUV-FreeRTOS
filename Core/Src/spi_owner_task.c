@@ -96,7 +96,20 @@ void spi_owner_task(void *argument)
 {
     (void)argument;
 
-    SpiRequest req;
+    /*
+     * P9: static, not a stack local.
+     *
+     * SpiRequest carries a 512-byte block by value - the deliberate
+     * choice that keeps block ownership out of the handoff between
+     * logging_task and this task. On the stack it made this task's frame
+     * 536 bytes and pushed worst-case usage to 93% of its 1 KB
+     * allocation. As a static it costs the same 520 bytes in .bss, where
+     * there are ~100 KB free, and the queue semantics are untouched.
+     *
+     * Safe because exactly one task ever executes this function and it
+     * is not reentrant.
+     */
+    static SpiRequest req;
 
     while (1)
     {

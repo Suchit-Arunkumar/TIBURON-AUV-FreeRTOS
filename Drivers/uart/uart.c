@@ -1,5 +1,6 @@
 #include "uart.h"
 #include "stm32f446xx.h"
+#include "console.h"
 #include <stdio.h>
 
 #define APB1CLK 45000000U
@@ -37,8 +38,49 @@ void uart2_init(void)
     // 8. enable transmitter (TE bit) in USART2 CR1
 	USART2->CR1 |= USART_CR1_TE;
 
-    // 9. enable USART2 (UE bit) in USART2 CR1
+    /*
+     * 9. Enable the receiver and its interrupt.
+     *
+     * P9: the stack high-water report is on demand rather than one-shot,
+     * so a keypress on the VCP has to reach the firmware. RX was
+     * configured on PA3 all along but never enabled.
+     */
+	USART2->CR1 |= USART_CR1_RE;
+	USART2->CR1 |= USART_CR1_RXNEIE;
+
+    /*
+     * 10. NVIC priority 6.
+     *
+     * Numerically above configMAX_SYSCALL_INTERRUPT_PRIORITY (5, raw
+     * 0x50), so this ISR is masked inside kernel critical sections and
+     * may legally call the FromISR API. It does not call it today - it
+     * only writes one volatile byte - but the priority has to be right
+     * regardless, or the kernel assert would fire the moment it did.
+     */
+	NVIC_SetPriority(USART2_IRQn, 6);
+	NVIC_EnableIRQ(USART2_IRQn);
+
+    // 11. enable USART2 (UE bit) in USART2 CR1
 	USART2->CR1 |= USART_CR1_UE;
+}
+
+
+//===========================================================================================================================
+void USART2_IRQHandler(void)
+{
+	if (USART2->SR & USART_SR_RXNE)
+	{
+		/* Reading DR clears RXNE. */
+		uint8_t ch = (uint8_t)(USART2->DR & 0xFFU);
+
+		/*
+		 * Hand the byte to the console command latch. Deliberately does
+		 * not touch any FreeRTOS API: the stdio owner already wakes every
+		 * 50 ms, so a single volatile byte is enough and this ISR stays
+		 * free of scheduler interaction entirely.
+		 */
+		console_rx_isr_char((char)ch);
+	}
 }
 
 

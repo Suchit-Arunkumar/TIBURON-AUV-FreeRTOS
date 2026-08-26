@@ -102,4 +102,21 @@ uint32_t console_dropped(void);
  */
 const char *console_fmt_milli(char *buf, uint32_t buflen, float v);
 
+/*
+ * On-demand command interface.
+ *
+ * console_rx_isr_char() is called from USART2_IRQHandler with whatever
+ * the operator typed. It stores one byte - latest wins, no ring buffer,
+ * because these are single-key commands typed by a human and a dropped
+ * repeat is harmless.
+ *
+ * console_take_command() is called by the stdio owner, which polls it on
+ * its existing 50 ms wake. Returns 0 when nothing is pending. Worst-case
+ * latency from keypress to output is therefore ~50 ms, which is
+ * imperceptible for this purpose and avoids giving the ISR any
+ * scheduler interaction at all.
+ */
+void console_rx_isr_char(char c);
+char console_take_command(void);
+
 #endif /* CONSOLE_H */

@@ -66,20 +66,34 @@ static TaskHandle_t dummyTaskHandle    = NULL;
  * P9 stack audit.
  *
  * uxTaskGetStackHighWaterMark(handle) returns the SMALLEST amount of free
- * stack a task has ever had since it started, in words — not the current
- * free amount. It's a watermark, not a live gauge. A task that used 90% of
- * its stack once, even briefly during startup, will report that 90% number
- * forever after, even if it's back to using 10% right now.
+ * stack a task has ever had since it started, in words - not the current
+ * free amount. It is a watermark, not a live gauge: a task that touched
+ * 90% of its stack once, briefly, during startup reports that number
+ * forever after.
  *
- * This runs ONCE, several seconds after boot, so every task has gone
- * through at least a few iterations of its normal worst-case code path
- * (e.g. control_task's failsafe branch, comms_task's TX branch) before the
- * numbers are read. Numbers are printed as: allocated words, HWM free
- * words remaining, and free bytes remaining (HWM * sizeof(StackType_t)).
+ * ---------------------------------------------------------------------
+ * KNOWN BLIND SPOT - the numbers this prints are a LOWER BOUND on usage,
+ * not a complete picture.
  *
- * This does NOT trim anything automatically. You read the printed output,
- * decide per-task whether the allocated size in xTaskCreate is wastefully
- * large, and edit those numbers yourself — that's the actual P9 work.
+ * A high-water mark only records paths that actually executed. Several
+ * of the deepest paths in this firmware do not run in a quiet bench
+ * session, so their stack cost will not appear here:
+ *
+ *   - console_printf() formats on the CALLER's stack: an 80-byte
+ *     ConsoleLine plus vsnprintf's own frame, on top of whatever that
+ *     task was already using. Most tasks only call it on an error path.
+ *     spi_owner_task's SD-error branch is the clearest example - it
+ *     never fires unless a write actually fails.
+ *   - control_task's failsafe branch and the flush-on-disarm path need
+ *     a link loss or a disarm to be exercised.
+ *   - comms_task's TX branch needs a packet to send.
+ *   - The sensor tasks' parse paths need real VN-200/DVL traffic, which
+ *     needs hardware that is not attached.
+ *
+ * Read the marks as "at least this much was used", and do not trim a
+ * stack on the strength of a run that never entered these branches. See
+ * the P9 notes in the README for what would justify trimming.
+ * ---------------------------------------------------------------------
  */
 static void print_stack_audit(void)
 {
@@ -92,18 +106,18 @@ static void print_stack_audit(void)
 
     AuditEntry tasks[] =
     {
-        { "Control", controlTaskHandle, 256 },
-        { "Comms",   commsTaskHandle,   256 },
-        { "VN200",   vn200TaskHandle,   256 },
-        { "DVL",     dvlTaskHandle,     256 },
-        { "Bar30",   bar30TaskHandle,   256 },
-        { "Filter",  filterTaskHandle,  256 },
+        { "Control", controlTaskHandle,  256 },
+        { "Filter",  filterTaskHandle,   256 },
+        { "Comms",   commsTaskHandle,    256 },
+        { "VN200",   vn200TaskHandle,    256 },
+        { "DVL",     dvlTaskHandle,      256 },
+        { "Bar30",   bar30TaskHandle,    256 },
         { "SPIOwner",spiOwnerTaskHandle, 256 },
-        { "Logging", loggingTaskHandle, 256 },
-        { "Dummy",   dummyTaskHandle,   128 },
+        { "Logging", loggingTaskHandle,  256 },
+        { "Dummy",   dummyTaskHandle,    256 },
     };
 
-    console_printf("=== P9 STACK AUDIT (free words = min ever seen) ===");
+    console_printf("--- STACK HWM (free words = min ever seen) ---");
 
     for (uint8_t i = 0; i < sizeof(tasks) / sizeof(tasks[0]); i++)
     {
@@ -116,19 +130,46 @@ static void print_stack_audit(void)
         UBaseType_t hwm_words = uxTaskGetStackHighWaterMark(tasks[i].handle);
 
         console_printf(
-            "%-8s alloc=%4u w  hwm_free=%4lu w (%4lu B)",
+            "%-8s alloc=%4u w  free=%4lu w (%4lu B)  used<=%4lu B",
             tasks[i].name,
             tasks[i].allocated_words,
             (unsigned long)hwm_words,
-            (unsigned long)(hwm_words * sizeof(StackType_t))
+            (unsigned long)(hwm_words * sizeof(StackType_t)),
+            (unsigned long)((tasks[i].allocated_words - hwm_words)
+                            * sizeof(StackType_t))
         );
     }
 
-    console_printf("heap free=%u B  log drops=%lu  console drops=%lu",
+    console_printf("NOTE: lower bound - untaken branches are not counted");
+    console_printf("--- END ---");
+}
+
+static void print_health(void)
+{
+    console_printf("--- HEALTH ---");
+    console_printf("clk       : %s", system_clock_status_str(g_clock_status));
+    console_printf("heap free : %u B of %u B",
                    (unsigned)xPortGetFreeHeapSize(),
-                   (unsigned long)control_log_drops(),
+                   (unsigned)configTOTAL_HEAP_SIZE);
+    console_printf("heap min  : %u B ever free",
+                   (unsigned)xPortGetMinimumEverFreeHeapSize());
+    console_printf("log drops : %lu records",
+                   (unsigned long)control_log_drops());
+    console_printf("con drops : %lu lines",
                    (unsigned long)console_dropped());
-    console_printf("=== END AUDIT ===");
+    console_printf("sd blocks : %lu ok, %lu err",
+                   (unsigned long)spi_owner_sd_writes(),
+                   (unsigned long)spi_owner_sd_errors());
+    console_printf("log stage : %lu recs, %lu blks, %lu post drops",
+                   (unsigned long)logging_records_staged(),
+                   (unsigned long)logging_blocks_emitted(),
+                   (unsigned long)logging_spi_post_drops());
+    console_printf("--- END ---");
+}
+
+static void print_help(void)
+{
+    console_printf("commands: s=stack hwm  h=health  ?=help");
 }
 
 static void dummy_task(void *argument)
@@ -168,12 +209,44 @@ static void dummy_task(void *argument)
             uart2_write_str("\r\n");
         }
 
+        /*
+         * On-demand reports. The operator types a key on the VCP;
+         * USART2_IRQHandler latches it and this poll picks it up on the
+         * next 50 ms wake.
+         */
+        switch (console_take_command())
+        {
+            case 's':
+            case 'S':
+                print_stack_audit();
+                break;
+
+            case 'h':
+            case 'H':
+                print_health();
+                break;
+
+            case '?':
+                print_help();
+                break;
+
+            default:
+                break;
+        }
+
         TickType_t now = xTaskGetTickCount();
 
+        /*
+         * One automatic report a few seconds after boot, so the numbers
+         * exist even if nobody is watching the console. After that it is
+         * on request only - see the blind-spot note on print_stack_audit.
+         */
         if ((audit_done == 0U) && ((int32_t)(now - audit_at) >= 0))
         {
             audit_done = 1U;
+            print_help();
             print_stack_audit();
+            print_health();
         }
 
         /*
@@ -647,7 +720,7 @@ int main(void)
     create_task_checked(bar30_task,   "Bar30 Task",   256, 4, &bar30TaskHandle);
     create_task_checked(spi_owner_task, "SPI Owner",   256, 3, &spiOwnerTaskHandle);
     create_task_checked(logging_task, "Logging Task", 256, 2, &loggingTaskHandle);
-    create_task_checked(dummy_task,   "Dummy",        128, 1, &dummyTaskHandle);
+    create_task_checked(dummy_task,   "Dummy",        256, 1, &dummyTaskHandle);
 
 
     /*

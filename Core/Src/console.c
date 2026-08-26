@@ -7,6 +7,26 @@ QueueHandle_t consoleQueue = NULL;
 
 static uint32_t console_drop_count = 0;
 
+/* Written by USART2_IRQHandler, read and cleared by the stdio owner. */
+static volatile char console_pending_cmd = 0;
+
+void console_rx_isr_char(char c)
+{
+    console_pending_cmd = c;
+}
+
+char console_take_command(void)
+{
+    char c = console_pending_cmd;
+
+    if (c != 0)
+    {
+        console_pending_cmd = 0;
+    }
+
+    return c;
+}
+
 void console_printf(const char *fmt, ...)
 {
     /*
