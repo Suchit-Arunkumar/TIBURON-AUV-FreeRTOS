@@ -78,6 +78,10 @@ void uart4_init(void)
     GPIOA->MODER &= ~(3U << (2U * 1U));
     GPIOA->MODER |=  (2U << (2U * 1U));
 
+    /* PA1 pull-up: keeps an unconnected RX at idle-high, not floating */
+    GPIOA->PUPDR &= ~(3U << (2U * 1U));
+    GPIOA->PUPDR |=  (1U << (2U * 1U));
+
 
     /*
      * PA0 = AF8.

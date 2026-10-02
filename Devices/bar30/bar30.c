@@ -1,6 +1,9 @@
 #include "bar30.h"
 #include "i2c.h"
 
+#include "FreeRTOS.h"
+#include "task.h"
+
 #define BAR30_ADDR     0x76
 #define BAR30_RESET    0x1E
 #define BAR30_PROM     0xA0
@@ -10,10 +13,12 @@
 
 static uint16_t prom[8];
 
+/* Only called from bar30_task, so a real RTOS delay is safe here. The old
+ * NOP loop gave ~2 ms instead of 10 at 180 MHz - shorter than the 9 ms
+ * OSR-4096 conversion, so the ADC read returned 0. */
 static void delay_ms_simple(uint32_t ms)
 {
-    for (uint32_t i = 0; i < ms * 8000; i++)
-        __NOP();
+    vTaskDelay(pdMS_TO_TICKS(ms));
 }
 
 I2C_Status bar30_init(void)
@@ -96,8 +101,9 @@ I2C_Status bar30_read(float *out_depth_m)
      */
     (void)TEMP;
 
-    /* Only now, with every transfer confirmed, publish a value. */
-    *out_depth_m = (P - 101300.0f) / (1025.0f * 9.80665f);
+    /* Only now, with every transfer confirmed, publish a value.
+     * MS5837-30BA reports P in 0.1 mbar (10 Pa) units, hence the x10. */
+    *out_depth_m = ((float)P * 10.0f - 101300.0f) / (1025.0f * 9.80665f);
 
     return I2C_OK;
 }
