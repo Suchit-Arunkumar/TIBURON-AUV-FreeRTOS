@@ -9,7 +9,6 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
-#include "comp_filter.h"
 
 #define N_DOF           6
 #define N_THR           8
@@ -43,7 +42,6 @@
 #define CMD_RECOVERY_PACKETS  3u
 
 extern volatile bool link_ok;
-extern QueueHandle_t stateQueue;
 
 /* Log records dropped because logQueue was full. */
 uint32_t control_log_drops(void);
@@ -63,7 +61,8 @@ void control_loop_init(void);
 
 void control_loop_tick(void);
 
-void state_update(const StateEstimate *state);
+/* Pose (x, y, z, roll, pitch, yaw) from the Pi's fused nav state. */
+void state_update(const float new_pose[N_DOF]);
 
 /*
  * Accept a new setpoint from a CRC-valid command packet.

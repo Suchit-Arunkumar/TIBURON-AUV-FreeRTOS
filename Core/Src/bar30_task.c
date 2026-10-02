@@ -109,9 +109,7 @@ void bar30_task(void *argument)
 
             /*
              * Nothing is published on failure. bar30Queue keeps its last
-             * value and filter_task's depth_new gate stays false, so the
-             * filter never applies a stale or fabricated depth
-             * correction.
+             * value, so telemetry never reports a fabricated depth.
              */
         }
 

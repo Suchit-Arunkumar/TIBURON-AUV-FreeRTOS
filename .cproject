@@ -60,7 +60,6 @@
 									<listOptionValue builtIn="false" value="../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy"/>
 									<listOptionValue builtIn="false" value="../Drivers/CMSIS/Device/ST/STM32F4xx/Include"/>
 									<listOptionValue builtIn="false" value="../Drivers/CMSIS/Include"/>
-									<listOptionValue builtIn="false" value="../Drivers/crc_hw"/>
 									<listOptionValue builtIn="false" value="../Drivers/i2c"/>
 									<listOptionValue builtIn="false" value="../Devices/bar30"/>
 									<listOptionValue builtIn="false" value="../Drivers/iwdg"/>
@@ -111,7 +110,6 @@
 								<listOptionValue builtIn="false" value="../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy"/>
 								<listOptionValue builtIn="false" value="../Drivers/CMSIS/Device/ST/STM32F4xx/Include"/>
 								<listOptionValue builtIn="false" value="../Drivers/CMSIS/Include"/>
-								<listOptionValue builtIn="false" value="../Drivers/crc_hw"/>
 								<listOptionValue builtIn="false" value="../Drivers/i2c"/>
 								<listOptionValue builtIn="false" value="../Devices/bar30"/>
 								<listOptionValue builtIn="false" value="../Drivers/iwdg"/>
