@@ -13,6 +13,10 @@ void timer2_timebase_init(void)
 	TIM2->ARR &= ~(0xFFFFFFFFU);
 	TIM2->ARR |= (0xFFFFFFFFU);
 
+    // PSC is buffered and only loads on an update event. With ARR at max the
+    // first natural update is ~47 s away, so force one now.
+	TIM2->EGR = TIM_EGR_UG;
+
     // 4. Set CR1 - clear counter direction (up), set CEN to start counter
 	TIM2->CR1 |= TIM_CR1_CEN;
 

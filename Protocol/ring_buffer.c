@@ -48,6 +48,13 @@ void rx_write(uint8_t *data, uint16_t len)
 	 */
 	for (uint16_t i = 0; i < len; i++)
 	{
+	    /* Full: drop the rest rather than overwrite unread bytes, same
+	     * policy as uart3.c / uart4.c. The CRC resyncs the parser. */
+	    if (rx_count >= RX_BUF_SIZE)
+	    {
+	        return;
+	    }
+
 	    rx_buf[rx_head] = data[i];
 
 	    rx_head++;

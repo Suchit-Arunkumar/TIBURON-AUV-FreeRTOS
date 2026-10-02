@@ -30,6 +30,11 @@ void spi2_init(void)
     GPIOB->MODER &= ~((3U << (2 * 13)) | (3U << (2 * 14)) | (3U << (2 * 15)));
     GPIOB->MODER |=  ((2U << (2 * 13)) | (2U << (2 * 14)) | (2U << (2 * 15)));
 
+    /* MISO pull-up: the SD spec wants DO pulled up, and with no card fitted
+     * a floating MISO could be mistaken for a valid R1 response. */
+    GPIOB->PUPDR &= ~(3U << (2 * 14));
+    GPIOB->PUPDR |=  (1U << (2 * 14));
+
     /* 3. High speed on all three — the bus runs at up to 11.25 MHz. */
     GPIOB->OSPEEDR |= (3U << (2 * 13)) | (3U << (2 * 14)) | (3U << (2 * 15));
 

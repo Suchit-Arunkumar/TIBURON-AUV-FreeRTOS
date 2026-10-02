@@ -25,6 +25,10 @@ void uart1_init(void)
 	GPIOA->MODER &= ~(3U << (2*10));
 	GPIOA->MODER |=  (2U << (2*10));
 
+	// PA10 pull-up: UART idles high, so an unconnected RX reads idle, not noise
+	GPIOA->PUPDR &= ~(3U << (2*10));
+	GPIOA->PUPDR |=  (1U << (2*10));
+
     // 4. set PA9 alternate function to AF7 (USART1 TX) in AFRH
     //    note: PA9 is pin 9, AFRH is AFR[1], position = (9-8)*4 = 4
 	GPIOA->AFR[1] |= (7 << 4);
@@ -39,8 +43,10 @@ void uart1_init(void)
     // 7. set baud rate in USART1 BRR (APB2 = 90MHz, target = 115200)
 	USART1->BRR = ((APB2CLK + UART1_BR/2)/UART1_BR);
 
-    // 8. enable receiver (RE bit) in USART1 CR1
-	USART1->CR1 |= USART_CR1_RE;
+    // 8. enable receiver (RE) and transmitter (TE) in USART1 CR1
+    //    TE is needed for telemetry - without it TXE never sets and
+    //    uart1_write_buf() spins forever
+	USART1->CR1 |= USART_CR1_RE | USART_CR1_TE;
 
     // 9. enable IDLE line interrupt (IDLEIE bit) in USART1 CR1
 	USART1->CR1 |= USART_CR1_IDLEIE;
