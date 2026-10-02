@@ -3,6 +3,7 @@
 #include "packet.h"
 #include "uart_packet.h"
 #include "control_loop.h"
+#include "bar30_task.h"
 #include <string.h>
 
 TaskHandle_t commsTaskHandle = NULL;
@@ -96,19 +97,12 @@ void comms_task(void *argument)
             telemetry.link_ok = control_loop_get_link();
 
             /*
-             * D11: these were memset to zero and never filled, so the Pi
-             * saw a telemetry frame that was structurally valid and
-             * substantively empty.
+             * Same split as the Pico firmware:
+             *   depth_m     - the Pi's fused depth, what the PID acts on
+             *   raw_depth_m - the onboard Bar30, telemetry only
              *
-             * depth_m is the FUSED depth from the state estimate, which
-             * is what the controller is actually acting on.
-             *
-             * raw_depth_m stays reserved and zero: it is the unfiltered
-             * Bar30 reading, and control_task never sees it - bar30_task
-             * publishes into bar30Queue and filter_task consumes it.
-             * Surfacing it would mean a second queue purely for
-             * telemetry, which is not worth it until someone needs to
-             * debug the filter against its own input.
+             * xQueuePeek, not Receive: bar30Queue is depth-1 overwrite and
+             * this only reads the latest value. Stays 0 with no sensor.
              */
             float pose_now[N_DOF];
             float u_now[N_DOF];
@@ -117,6 +111,13 @@ void comms_task(void *argument)
             control_loop_get_u(u_now);
 
             telemetry.depth_m   = pose_now[2];
+
+            float raw_depth = 0.0f;
+            if ((bar30Queue != NULL) &&
+                (xQueuePeek(bar30Queue, &raw_depth, 0) == pdPASS))
+            {
+                telemetry.raw_depth_m = raw_depth;
+            }
             telemetry.sat_flags = control_loop_get_sat_flags();
 
             for (int i = 0; i < N_DOF; i++)

@@ -23,7 +23,7 @@
 #include "comms_task.h"
 #include "logging_task.h"
 #include "sd_logger.h"
-#include "crc_hw.h"
+#include "crc16.h"
 #include "timer_basic.h"
 #include "iwdg.h"
 
@@ -242,16 +242,16 @@ void control_loop_tick(void)
     applyPWM();
 }
 
-void state_update(const StateEstimate *state)
+/*
+ * Pose comes from the Pi's fused navigation state (current_x..yaw in each
+ * CMD packet), exactly as on the competition Pico firmware. Sensor fusion
+ * runs on the Pi; the onboard sensors are not inputs to the controller.
+ */
+void state_update(const float new_pose[N_DOF])
 {
-    if (state == NULL || !state->attitude_valid) return;
+    if (new_pose == NULL) return;
 
-    pose[0] = state->x;
-    pose[1] = state->y;
-    pose[2] = state->z;
-    pose[3] = state->roll;
-    pose[4] = state->pitch;
-    pose[5] = state->yaw;
+    memcpy(pose, new_pose, N_DOF * sizeof(float));
 }
 
 void target_update(const float new_target[N_DOF], bool arm_flag)
@@ -589,17 +589,21 @@ void control_task(void *argument)
 	{
 	    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
 
-	    StateEstimate state;
-
-	    if (xQueueReceive(stateQueue, &state, 0) == pdPASS)
-	    {
-	        state_update(&state);
-	    }
-
 	    CommandPayload cmd;
 
 	    if (xQueueReceive(commandQueue, &cmd, 0) == pdPASS)
 	    {
+	        float new_pose[6] = {
+	            cmd.current_x,
+	            cmd.current_y,
+	            cmd.current_z,
+	            cmd.current_roll,
+	            cmd.current_pitch,
+	            cmd.current_yaw
+	        };
+
+	        state_update(new_pose);
+
 	        float new_target[6] = {
 	            cmd.target_x,
 	            cmd.target_y,
@@ -701,12 +705,10 @@ void control_task(void *argument)
 	            record->crc16        = 0;
 
 	            /*
-	             * Hardware CRC32 truncated to its low 16 bits - this is a
-	             * truncated CRC32, not a CRC16, and the field name is
-	             * historical. Computed over the record excluding the
-	             * field itself, which is why crc16 is last in the struct.
+	             * CRC-16-CCITT over the record excluding the field itself,
+	             * which is why crc16 is last in the struct.
 	             */
-	            record->crc16 = (uint16_t)crc_compute(
+	            record->crc16 = crc16_ccitt(
 	                (const uint8_t *)record,
 	                sizeof(LogRecord) - sizeof(record->crc16)
 	            );

@@ -19,8 +19,8 @@
  * carry on.
  *
  * ABSENT after this many consecutive timeouts from boot; FAULTED if data
- * had been flowing and then stopped. filter_task gates on freshness, so
- * neither state feeds stale values into the estimate.
+ * had been flowing and then stopped. Nothing is published in either
+ * state, so no stale value ever reaches the queue.
  */
 #define DVL_WAIT_MS          500U
 #define DVL_ABSENT_TIMEOUTS  6U     /* ~3 s of silence */

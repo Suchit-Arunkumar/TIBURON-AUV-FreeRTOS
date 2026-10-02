@@ -11,7 +11,9 @@
 #define STX1         0xAA
 #define STX2         0x55
 #define PAYLOAD_LEN  56
-#define PACKET_SIZE  64   // 4 header + 56 payload + 4 CRC32
+// Same frame as the Pico firmware, so the existing Pi code works unchanged:
+// [0xAA][0x55][LEN][TYPE][56-byte payload][CRC16 hi][CRC16 lo]
+#define PACKET_SIZE  62   // 4 header + 56 payload + 2 CRC16
 
 #define TYPE_TELEMETRY  0x01
 #define TYPE_CMD        0x02

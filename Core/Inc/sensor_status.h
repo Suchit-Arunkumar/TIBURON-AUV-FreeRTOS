@@ -19,8 +19,7 @@
  *     console.
  *
  * Each task now degrades to SENSOR_ABSENT: it keeps running, publishes
- * nothing, and says so once on the console. filter_task already gates on
- * per-sensor freshness, so an absent sensor simply never contributes.
+ * nothing, and says so once on the console.
  *
  * The distinction that matters for the bench is PRESENT vs ABSENT vs
  * FAULTED: absent means nothing ever answered, faulted means something

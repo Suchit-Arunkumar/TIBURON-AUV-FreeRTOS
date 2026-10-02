@@ -1,6 +1,6 @@
 #include "packet.h"
 #include "ring_buffer.h"
-#include "crc_hw.h"
+#include "crc16.h"
 #include <string.h>
 
 void packet_build_telemetry(const TelemetryPayload *tp, uint8_t *out_buf){
@@ -17,12 +17,11 @@ void packet_build_telemetry(const TelemetryPayload *tp, uint8_t *out_buf){
 
 	memcpy(&out_buf[4], tp, sizeof(TelemetryPayload));
 
-	uint32_t crc = crc_compute(&out_buf[2], 2 + PAYLOAD_LEN);
+	// CRC-16 over LEN + TYPE + PAYLOAD, sent high byte first
+	uint16_t crc = crc16_ccitt(&out_buf[2], 2 + PAYLOAD_LEN);
 
-	out_buf[PACKET_SIZE - 4]= (crc >> 24);
-	out_buf[PACKET_SIZE - 3]= (crc >> 16);
-	out_buf[PACKET_SIZE - 2]= (crc >> 8);
-	out_buf[PACKET_SIZE - 1]= (crc);
+	out_buf[PACKET_SIZE - 2]= (uint8_t)(crc >> 8);
+	out_buf[PACKET_SIZE - 1]= (uint8_t)(crc);
 
 }
 
@@ -56,14 +55,12 @@ uint8_t packet_parse_cmd(CommandPayload *out_cmd)
             pkt[i] = rx_peek(i);
         }
         // Compute CRC over LEN + TYPE + PAYLOAD
-        uint32_t calc_crc =
-            crc_compute(&pkt[2], 2 + PAYLOAD_LEN);
-        // Reconstruct received CRC
-        uint32_t recv_crc =
-            ((uint32_t)pkt[60] << 24) |
-            ((uint32_t)pkt[61] << 16) |
-            ((uint32_t)pkt[62] << 8)  |
-            ((uint32_t)pkt[63]);
+        uint16_t calc_crc =
+            crc16_ccitt(&pkt[2], 2 + PAYLOAD_LEN);
+        // Reconstruct received CRC (high byte first)
+        uint16_t recv_crc =
+            (uint16_t)(((uint16_t)pkt[PACKET_SIZE - 2] << 8) |
+                       pkt[PACKET_SIZE - 1]);
         if (calc_crc != recv_crc)
         {
             rx_eat(1);

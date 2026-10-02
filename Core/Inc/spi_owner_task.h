@@ -39,7 +39,7 @@
  *   - strictly ABOVE every task that sends it requests (logging at 1), so
  *     a requester cannot preempt the owner and pile up more work while a
  *     transaction is in flight;
- *   - strictly BELOW every task with a deadline (control 7, filter 6,
+ *   - strictly BELOW every task with a deadline (control 7,
  *     comms 5, sensors 4), so a 250 ms SD program cycle is preemptible by
  *     all of them.
  *

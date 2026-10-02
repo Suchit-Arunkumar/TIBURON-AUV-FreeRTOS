@@ -22,7 +22,7 @@ typedef struct __attribute__((packed))
     uint8_t armed;           // 0 = disarmed, 1 = armed
     uint8_t link_ok;         // 0 = link lost, 1 = link healthy
 
-    uint16_t crc16;          // truncated hardware CRC32, low 16 bits
+    uint16_t crc16;          // CRC-16-CCITT over the fields above
 
 } LogRecord;
 
