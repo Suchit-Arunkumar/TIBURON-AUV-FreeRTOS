@@ -26,7 +26,6 @@
 #include "packet.h"
 #include "sd_logger.h"
 
-#include "crc_hw.h"
 
 #include "i2c.h"
 #include "bar30.h"
@@ -40,7 +39,6 @@
 #include "vn200.h"
 #include "dvl_task.h"
 #include "dvl.h"
-#include "filter_task.h"
 #include "bar30_task.h"
 #include "logging_task.h"
 #include "spi_owner_task.h"
@@ -58,7 +56,6 @@
  * these are new, added specifically for the stack audit below.
  */
 static TaskHandle_t bar30TaskHandle    = NULL;
-static TaskHandle_t filterTaskHandle   = NULL;
 static TaskHandle_t spiOwnerTaskHandle = NULL;
 static TaskHandle_t loggingTaskHandle  = NULL;
 static TaskHandle_t dummyTaskHandle    = NULL;
@@ -108,7 +105,6 @@ static void print_stack_audit(void)
     AuditEntry tasks[] =
     {
         { "Control", controlTaskHandle,  256 },
-        { "Filter",  filterTaskHandle,   256 },
         { "Comms",   commsTaskHandle,    256 },
         { "VN200",   vn200TaskHandle,    256 },
         { "DVL",     dvlTaskHandle,      256 },
@@ -512,12 +508,6 @@ int main(void)
 
 
     /*
-     * 6. Initialize hardware CRC.
-     */
-    crc_init();
-
-
-    /*
      * 7. Initialize SPI2 (OLED + SD card).
      *
      * ADC and DAC init used to sit here. Both were dead code — nothing
@@ -663,15 +653,6 @@ int main(void)
         );
 
     /*
-     * Latest state-estimate queue (filter_task -> control_task).
-     */
-    stateQueue =
-        xQueueCreate(
-            1,
-            sizeof(StateEstimate)
-        );
-
-    /*
      * Phase 8 — control_task -> logging_task.
      *
      * Depth 8 of LogQueueItem (44 B) = 352 B of storage. Records arrive
@@ -722,7 +703,6 @@ int main(void)
         dvlQueue == NULL ||
         vn200Queue == NULL ||
         bar30Queue == NULL ||
-        stateQueue == NULL ||
         logQueue == NULL ||
         spiRequestQueue == NULL ||
         consoleQueue == NULL)
@@ -745,7 +725,6 @@ int main(void)
      * Priority scheme (configMAX_PRIORITIES = 8, so 7 is the top):
      *
      *   7  Control   50 Hz deadline; nothing may delay it
-     *   6  Filter    must have a fresh estimate ready before Control wakes
      *   5  Comms     command ingest and telemetry egress
      *   4  VN200 / DVL / Bar30   sensor drivers, equal and interchangeable
      *   3  SPIOwner  sole owner of SPI2 (OLED + SD)
@@ -759,7 +738,6 @@ int main(void)
      * Every creation is checked — see create_task_checked above.
      */
     create_task_checked(control_task, "Control Task", 256, 7, &controlTaskHandle);
-    create_task_checked(filter_task,  "Filter Task",  256, 6, &filterTaskHandle);
     create_task_checked(comms_task,   "Comms Task",   256, 5, &commsTaskHandle);
     create_task_checked(vn200_task,   "VN200 Task",   256, 4, &vn200TaskHandle);
     create_task_checked(dvl_task,     "DVL Task",     256, 4, &dvlTaskHandle);

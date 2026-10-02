@@ -23,7 +23,7 @@ I2C_Status bar30_init(void);
 /*
  * One pressure + temperature conversion, converted to depth in metres.
  * Writes *out_depth_m only on I2C_OK; leaves it untouched otherwise, so
- * a failed read cannot inject a bogus 0 m into the filter.
+ * a failed read cannot publish a bogus 0 m.
  */
 I2C_Status bar30_read(float *out_depth_m);
 
