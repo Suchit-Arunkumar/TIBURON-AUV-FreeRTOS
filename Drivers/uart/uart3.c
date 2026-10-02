@@ -67,6 +67,10 @@
 		GPIOC->MODER &= ~(3U << (2U * 11U));
 		GPIOC->MODER |=  (2U << (2U * 11U));
 
+		/* PC11 pull-up: keeps an unconnected RX at idle-high, not floating */
+		GPIOC->PUPDR &= ~(3U << (2U * 11U));
+		GPIOC->PUPDR |=  (1U << (2U * 11U));
+
 
 		/*
 		 * 4. Set PC10 alternate function to AF7
