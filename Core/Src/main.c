@@ -44,6 +44,7 @@
 #include "spi_owner_task.h"
 #include "console.h"
 #include "sensor_status.h"
+#include "bench.h"
 
 
 //===========================================================================================================================
@@ -184,6 +185,29 @@ static void print_health(void)
 static void print_help(void)
 {
     console_printf("commands: s=stack hwm  h=health  ?=help");
+    bench_print_help();
+}
+
+
+/*
+ * Why the last reset happened, from RCC_CSR (RM0390 6.3.21), then clear
+ * the flags so the next boot reports only its own cause. A power-on sets
+ * POR, PIN and BOR together; a watchdog reset sets IWDG and PIN.
+ */
+static void reset_cause_report(void)
+{
+    uint32_t csr = RCC->CSR;
+
+    printf("RESET:%s%s%s%s%s%s%s\r\n",
+           (csr & RCC_CSR_LPWRRSTF) ? " LPWR" : "",
+           (csr & RCC_CSR_WWDGRSTF) ? " WWDG" : "",
+           (csr & RCC_CSR_IWDGRSTF) ? " IWDG" : "",
+           (csr & RCC_CSR_SFTRSTF)  ? " SOFT" : "",
+           (csr & RCC_CSR_PORRSTF)  ? " POR"  : "",
+           (csr & RCC_CSR_PINRSTF)  ? " PIN"  : "",
+           (csr & RCC_CSR_BORRSTF)  ? " BOR"  : "");
+
+    RCC->CSR |= RCC_CSR_RMVF;
 }
 
 static void dummy_task(void *argument)
@@ -208,6 +232,9 @@ static void dummy_task(void *argument)
      */
     ConsoleLine line;
 
+    console_set_owner();
+    bench_dummy_first_run();
+
     TickType_t last_blink = xTaskGetTickCount();
     uint8_t    blink_phase = 0;
 
@@ -228,7 +255,9 @@ static void dummy_task(void *argument)
          * USART2_IRQHandler latches it and this poll picks it up on the
          * next 50 ms wake.
          */
-        switch (console_take_command())
+        char c = console_take_command();
+
+        switch (c)
         {
             case 's':
             case 'S':
@@ -245,6 +274,7 @@ static void dummy_task(void *argument)
                 break;
 
             default:
+                (void)bench_console_key(c);
                 break;
         }
 
@@ -495,6 +525,7 @@ int main(void)
 
     printf("BOOT OK\r\n");
     printf("CLK: %s\r\n", system_clock_status_str(g_clock_status));
+    reset_cause_report();
 
 
     /*
@@ -529,6 +560,12 @@ int main(void)
      * has no scheduler to return from.
      */
     timer2_timebase_init();
+
+    /*
+     * 8a. BENCH_HIL: DWT cycle counter and PA15 input capture on TIM2_CH1.
+     *     Needs TIM2 running, so it sits right after the timebase.
+     */
+    bench_init();
 
 
     /*
@@ -746,6 +783,15 @@ int main(void)
     create_task_checked(logging_task, "Logging Task", 256, 2, &loggingTaskHandle);
     create_task_checked(dummy_task,   "Dummy",        256, 1, &dummyTaskHandle);
 
+    bench_register_task("Ctl",  controlTaskHandle);
+    bench_register_task("Com",  commsTaskHandle);
+    bench_register_task("VN",   vn200TaskHandle);
+    bench_register_task("DVL",  dvlTaskHandle);
+    bench_register_task("B30",  bar30TaskHandle);
+    bench_register_task("SPI",  spiOwnerTaskHandle);
+    bench_register_task("Log",  loggingTaskHandle);
+    bench_register_task("Dum",  dummyTaskHandle);
+
 
     /*
      * LAST BEFORE THE SCHEDULER: CONFIGURE the interrupt-driven UARTs.
@@ -778,6 +824,15 @@ int main(void)
     uart4_init();   /* Wayfinder DVL */
 
     printf("UARTS CONFIGURED (IRQs enabled by their tasks)\r\n");
+
+#if BENCH_HIL
+    printf("**********************************************\r\n");
+    printf("*  BENCH_HIL BUILD - laptop test hooks in    *\r\n");
+    printf("*  Console keys can drive ESC outputs off    *\r\n");
+    printf("*  neutral. Never flash this to the vehicle. *\r\n");
+    printf("*  Build with -DBENCH_HIL=0 for the vehicle. *\r\n");
+    printf("**********************************************\r\n");
+#endif
 
 
     /*

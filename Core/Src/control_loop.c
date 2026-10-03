@@ -26,6 +26,7 @@
 #include "crc16.h"
 #include "timer_basic.h"
 #include "iwdg.h"
+#include "bench.h"
 
 
 // =============================================================================
@@ -126,7 +127,9 @@ static int                 g_pwm_current[N_THR];
  * Failsafe latch and recovery counter.
  *
  * g_in_failsafe is sticky: once the link is declared lost it stays set
- * until CMD_RECOVERY_PACKETS consecutive CRC-valid packets have arrived.
+ * until CMD_RECOVERY_PACKETS consecutive CRC-valid packets have arrived,
+ * none more than CMD_TIMEOUT_MS after the one before (checkCommandTimeout
+ * resets the streak on a longer gap).
  * Without the latch, a single packet arriving inside the timeout window
  * would silently re-arm the vehicle from one frame.
  */
@@ -475,12 +478,27 @@ void checkCommandTimeout(void)
      * packet out of a permanent failsafe-trip loop; g_in_failsafe already
      * starts true, so the vehicle is disarmed either way.
      */
-    if (last_cmd_tick != 0 &&
-        (xTaskGetTickCount() - last_cmd_tick) > pdMS_TO_TICKS(CMD_TIMEOUT_MS))
+    TickType_t since = xTaskGetTickCount() - last_cmd_tick;
+
+    if (last_cmd_tick != 0 && since > pdMS_TO_TICKS(CMD_TIMEOUT_MS))
     {
         if (!g_in_failsafe)
         {
             enterFailsafe();
+            bench_failsafe_entered((uint32_t)since * portTICK_PERIOD_MS);
+        }
+        else if (g_recovery_count != 0U)
+        {
+            /*
+             * A gap longer than the timeout breaks the recovery streak.
+             *
+             * Without this, "three consecutive packets" was really "three
+             * packets since the dropout, at any spacing": two packets, ten
+             * seconds of silence, one more, and the vehicle re-armed off a
+             * link that had been dead for most of that time. The streak now
+             * has to arrive with no gap a healthy link would not have.
+             */
+            g_recovery_count = 0U;
         }
     }
 }
@@ -588,6 +606,7 @@ void control_task(void *argument)
 	for (;;)
 	{
 	    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+	    bench_control_wake();
 
 	    CommandPayload cmd;
 
@@ -614,9 +633,11 @@ void control_task(void *argument)
 	        };
 
 	        target_update(new_target, cmd.armed);
+	        bench_cmd_consumed(&cmd);
 	    }
 
 	    control_loop_tick();
+	    bench_after_control_tick();   /* PWM signature / hang: BENCH_HIL only */
 
 	    /*
 	     * Refresh the watchdog only here, and only after a completed
@@ -720,5 +741,6 @@ void control_task(void *argument)
 	        }
 	    }
 
+	    bench_control_done();
 	}
 }

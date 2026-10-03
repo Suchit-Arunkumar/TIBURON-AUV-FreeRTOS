@@ -29,6 +29,7 @@
 #include "sd_logger.h"
 #include "FreeRTOS.h"
 #include "task.h"
+#include "bench.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 /* USER CODE END Includes */
@@ -185,6 +186,8 @@ void DebugMon_Handler(void)
 
 void TIM7_IRQHandler(void)
 {
+    bench_tim7_isr();      /* DWT stamp; compiles to nothing without BENCH_HIL */
+
     // Clear TIM7 update interrupt flag
     TIM7->SR &= ~TIM_SR_UIF;
 

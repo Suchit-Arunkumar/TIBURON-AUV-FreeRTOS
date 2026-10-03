@@ -25,6 +25,9 @@ static volatile uint16_t rx_tail = 0;
 // number of bytes available (ISR increments, task decrements)
 static volatile uint16_t rx_count = 0;
 
+// bytes lost because the ring was full (ISR writes, any task reads)
+static volatile uint32_t rx_dropped = 0;
+
 
 void rx_write(uint8_t *data, uint16_t len)
 {
@@ -52,6 +55,9 @@ void rx_write(uint8_t *data, uint16_t len)
 	     * policy as uart3.c / uart4.c. The CRC resyncs the parser. */
 	    if (rx_count >= RX_BUF_SIZE)
 	    {
+	        /* Counted, as in the bare-metal tree: a silent drop here looked
+	         * exactly like a CRC failure from the outside. */
+	        rx_dropped += (uint32_t)(len - i);
 	        return;
 	    }
 
@@ -99,4 +105,9 @@ void rx_eat(uint16_t len)
 	rx_count -= len;
 
 	__set_PRIMASK(primask);
+}
+
+uint32_t rx_dropped_count(void)
+{
+	return rx_dropped;
 }

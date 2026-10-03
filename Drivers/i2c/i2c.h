@@ -34,6 +34,10 @@ const char *i2c_status_str(I2C_Status s);
 void       i2c1_init(void);
 I2C_Status i2c_write(uint8_t addr, uint8_t *data, uint8_t len);
 I2C_Status i2c_read(uint8_t addr, uint8_t *buf, uint8_t len);
+/* Master receive using RM0390's per-length sequences (N = 1, N = 2 with POS,
+ * N > 2 with BTF on the last three bytes). Immune to the task being
+ * preempted mid-transfer; i2c_read() is not. See i2c.c. */
+I2C_Status i2c_read_rm(uint8_t addr, uint8_t *buf, uint8_t len);
 
 /*
  * Recover a bus left stuck by a device mid-transfer. Clears BUSY by

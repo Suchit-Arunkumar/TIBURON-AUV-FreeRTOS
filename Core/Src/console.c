@@ -2,10 +2,20 @@
 
 #include <stdarg.h>
 #include <stdio.h>
+#include "task.h"
+#include "uart.h"
 
 QueueHandle_t consoleQueue = NULL;
 
 static volatile uint32_t console_drop_count = 0;
+
+/* The stdio owner (dummy_task), registered from its first iteration. */
+static TaskHandle_t console_owner = NULL;
+
+void console_set_owner(void)
+{
+    console_owner = xTaskGetCurrentTaskHandle();
+}
 
 /* Written by USART2_IRQHandler, read and cleared by the stdio owner. */
 static volatile char console_pending_cmd = 0;
@@ -40,6 +50,22 @@ void console_printf(const char *fmt, ...)
     va_start(args, fmt);
     (void)vsnprintf(line.text, sizeof(line.text), fmt, args);
     va_end(args);
+
+    /*
+     * The owner writes its own lines directly. It is the only task that
+     * drains consoleQueue, so a line it posted there could not be printed
+     * until it returned to its loop, and a report longer than the queue
+     * (CONSOLE_QUEUE_DEPTH = 8) lost its tail: the 13-line health and stack
+     * reports were printing 8 lines and counting the rest as drops.
+     * Writing directly is still single-owner output; the only cost is
+     * that lines other tasks queued meanwhile print after the report.
+     */
+    if ((console_owner != NULL) && (xTaskGetCurrentTaskHandle() == console_owner))
+    {
+        uart2_write_str(line.text);
+        uart2_write_str("\r\n");
+        return;
+    }
 
     if (consoleQueue == NULL)
     {
