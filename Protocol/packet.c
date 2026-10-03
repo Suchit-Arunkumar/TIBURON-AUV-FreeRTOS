@@ -2,6 +2,7 @@
 #include "ring_buffer.h"
 #include "crc16.h"
 #include <string.h>
+#include "bench.h"
 
 void packet_build_telemetry(const TelemetryPayload *tp, uint8_t *out_buf){
 
@@ -43,6 +44,31 @@ uint8_t packet_parse_cmd(CommandPayload *out_cmd)
             continue;
         }
         // Check type
+#if BENCH_HIL
+        /*
+         * Bench loopback (PA9 jumpered to PA10): this board's own telemetry
+         * comes back. Check its CRC and consume it whole, so the bench can
+         * count it and compare its depth with the command that produced it.
+         * The vehicle build never sees TELEMETRY inbound and skips this.
+         */
+        if (rx_peek(3) == TYPE_TELEMETRY)
+        {
+            uint8_t tpkt[PACKET_SIZE];
+            for (int i = 0; i < PACKET_SIZE; i++)
+            {
+                tpkt[i] = rx_peek(i);
+            }
+            uint16_t c = crc16_ccitt(&tpkt[2], 2 + PAYLOAD_LEN);
+            if (c == (uint16_t)(((uint16_t)tpkt[PACKET_SIZE - 2] << 8) | tpkt[PACKET_SIZE - 1]))
+            {
+                bench_telemetry_looped(&tpkt[4]);
+                rx_eat(PACKET_SIZE);
+                continue;
+            }
+            bench_telemetry_looped(NULL);    /* counted as a CRC failure */
+        }
+#endif
+
         if (rx_peek(3) != TYPE_CMD)
         {
             rx_eat(1);

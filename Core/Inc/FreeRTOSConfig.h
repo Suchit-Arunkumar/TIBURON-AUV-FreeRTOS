@@ -2,6 +2,7 @@
 #define FREERTOS_CONFIG_H
 
 #include <stdint.h>
+#include "bench_config.h"
 
 /*-----------------------------------------------------------
  * System configuration
@@ -62,7 +63,21 @@
 #define configUSE_MALLOC_FAILED_HOOK           1
 
 #define configUSE_APPLICATION_TASK_TAG         0
+/*
+ * Run-time stats only in the bench build, where hil_rtos.py reads per-task
+ * CPU load. The counter is TIM2, already free-running at 1 MHz from main()
+ * step 8, so there is nothing to configure; CNT is read by address because
+ * this header is pulled into every kernel translation unit. The extra
+ * 4-byte TCB field does not change the heap ledger: an 84 B TCB and an
+ * 88 B TCB both round to a 96 B heap_4 block.
+ */
+#if BENCH_HIL
+#define configGENERATE_RUN_TIME_STATS          1
+#define portCONFIGURE_TIMER_FOR_RUN_TIME_STATS()
+#define portGET_RUN_TIME_COUNTER_VALUE()       (*(volatile uint32_t *)0x40000024UL)  /* TIM2->CNT */
+#else
 #define configGENERATE_RUN_TIME_STATS          0
+#endif
 
 /*-----------------------------------------------------------
  * Software timers
@@ -140,7 +155,11 @@
 #define INCLUDE_xTaskGetCurrentTaskHandle      1
 #define INCLUDE_uxTaskGetStackHighWaterMark    1
 
+#if BENCH_HIL
+#define INCLUDE_xTaskGetIdleTaskHandle         1   /* CPU load report       */
+#else
 #define INCLUDE_xTaskGetIdleTaskHandle         0
+#endif
 #define INCLUDE_eTaskGetState                  1
 
 #define INCLUDE_xTimerPendFunctionCall         0

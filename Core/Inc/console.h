@@ -129,4 +129,8 @@ const char *console_fmt_milli(char *buf, uint32_t buflen, float v);
 void console_rx_isr_char(char c);
 char console_take_command(void);
 
+/* Call once from the stdio owner task. Its own console_printf() lines are
+ * then written directly instead of through consoleQueue. */
+void console_set_owner(void);
+
 #endif /* CONSOLE_H */

@@ -5,6 +5,7 @@
 #include "control_loop.h"
 #include "bar30_task.h"
 #include <string.h>
+#include "bench.h"
 
 TaskHandle_t commsTaskHandle = NULL;
 QueueHandle_t commandQueue = NULL;
@@ -64,9 +65,18 @@ void comms_task(void *argument)
         {
             CommandPayload cmd;
 
-            if (packet_parse_cmd(&cmd))
+            /*
+             * Drain every complete frame, not just the first. One IDLE
+             * event can deliver more than one frame (two CMDs back to
+             * back, or a CMD behind looped-back telemetry); with a single
+             * parse per notification the second one waited for the next
+             * burst to arrive, a full tick late or, if the Pi then went
+             * quiet, never.
+             */
+            while (packet_parse_cmd(&cmd))
             {
                 cmd_valid_count++;
+                bench_cmd_parsed(&cmd);
 
                 /*
                  * Short bounded wait, then drop and count. Blocking
@@ -86,7 +96,7 @@ void comms_task(void *argument)
         }
 
         /* TX: telemetry requested */
-        if (notify_value & (1UL << 1))
+        if ((notify_value & (1UL << 1)) && !bench_comms_skip_telemetry())
         {
             TelemetryPayload telemetry;
             uint8_t tx_buf[PACKET_SIZE];
@@ -151,6 +161,13 @@ void comms_task(void *argument)
                 tx_buf,
                 PACKET_SIZE
             );
+        }
+
+        /* BENCH_HIL: loopback injector writes after telemetry, same task, so
+         * the two never interleave on the wire. Nothing otherwise. */
+        if (notify_value & (1UL << 1))
+        {
+            bench_comms_after_tx();
         }
     }
 }
