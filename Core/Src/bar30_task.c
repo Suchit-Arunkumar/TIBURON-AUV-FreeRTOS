@@ -6,6 +6,7 @@
 
 #include "FreeRTOS.h"
 #include "task.h"
+#include "bench.h"
 
 #define BAR30_TASK_PERIOD_MS      20U
 
@@ -142,6 +143,10 @@ void bar30_task(void *argument)
         {
             period = pdMS_TO_TICKS(BAR30_ABSENT_PERIOD_MS);
         }
+
+        /* BENCH_HIL: queued I2C bench work (MPU-6050 stress) runs here,
+         * in the bus owner's own context, between Bar30 transactions. */
+        bench_i2c_service();
 
         vTaskDelayUntil(&last_wake, period);
     }
