@@ -2,7 +2,27 @@
 
 Fifteen points, in order. **Each assumes every prerequisite point has passed.**
 
-Nothing in this firmware has run on a board. Every figure in the README is computed from the map file, `-fstack-usage` output, or disassembly. This checklist is the list of things that turns those into measurements — and, more importantly, the list of things that could falsify them.
+This checklist was written before the board was available, as the list of things that would turn computed figures into measurements, and the list of things that could falsify them. **Status after the hardware runs of 2026-10-05** (bare NUCLEO-F446RE, `tools/hil/hil_rtos.py`, transcripts in `tools/hil/reports/`):
+
+| # | Point | Status | Result |
+|---|---|---|---|
+| 1 | SYSCLK is 180 MHz | **Done** | DWT, TIM2 and SysTick agree exactly over 10.14 s (180.0000 cycles/µs); laptop within 0.16 % |
+| 2 | Clock source is HSE | **Done** | `CLK: OK (HSE bypass, 180 MHz)` on every boot |
+| 3 | Console end to end | **Done** | TX and RX both exercised by every bench key |
+| 4 | Fault latch survives warm reset | **Done** | `configASSERT` reported with file and line after a watchdog reset |
+| 5 | PWM 1500 µs at 50 Hz on all 8 channels | **Done** | Per-channel widths exact on all 8 pins, 20,000 µs period, return to 1,500 µs confirmed (TIM2 capture, not a scope) |
+| 6 | ESCs arm and hold neutral | Not done | No ESCs on the bench |
+| 7 | Failsafe within 500 ms | **Done, at the PWM-value level** | 520 ms (500 ms + one tick), 5 / 5, also with `comms_task` suspended; recovery needs 3 consecutive packets. Not scoped on an ESC line |
+| 8 | SD enumerates | Not done | No card fitted |
+| 9 | SD worst-case busy time | Not done | No card fitted |
+| 10 | OLED refresh time | Not done | No OLED fitted |
+| 11 | Stack high-water marks vs predictions | **Done** | See README §8; `dummy_task` grown to 1,536 B after reaching 928 of 1,024 B |
+| 12 | `vsnprintf` frame vs the ~120 B estimate | **Estimated from measurement** | VN-200 and DVL tasks run ~100 B over prediction on the `console_printf` path: real frame ≈ 220 B |
+| 13 | Heap prediction: free == min-ever-free | **Done** | 9,448 B == 9,448 B |
+| 14 | MSP high-water mark ≤ 360 B | **Done** | 176–248 B |
+| 15 | DMA exact-wrap aliasing | **Done: reproduced and fixed** | 0 / 256 bytes with IDLE-only draining, 256 / 256 with half/full-transfer draining |
+
+The point-by-point instructions below are kept as written; the measurement methods used on the bench differ in places (TIM2 input capture instead of a scope, a USART1 loopback instead of a Pi).
 
 **Work in order.** The ordering is not stylistic: point 1 gates every timing number in the repository, points 2–4 gate the console you need to read the rest, and points 5–7 gate anything involving thrusters. Skipping ahead produces results you cannot interpret.
 
