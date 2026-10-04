@@ -556,11 +556,17 @@ def test_mpu(c: Console, ctx: Ctx, rounds: int) -> Result:
             c.key(key)
             hit = c.wait(lambda ln: ln.startswith("B:mpu2") or ln.startswith("B:mpu absent"), 30, m)
             if hit is None or "absent" in hit[1]:
+                for _, ln in c.since(m):
+                    if ln.startswith("B:i2c"):
+                        r.note(ln)
                 if hit:
                     r.note(hit[1])
                 c.command("x", "B:inj off")
                 return r.skip("no MPU-6050 answering at 0x68 on PB8/PB9")
             lines = [ln for _, ln in c.since(m)]
+            for ln in lines:
+                if ln.startswith("B:i2c"):
+                    r.note(ln)
             a = ints(kv(next(ln for ln in lines if ln.startswith("B:mpu m="))))
             b = ints(kv(hit[1]))
             for k in ("n", "ewho", "etmp", "eacc", "e14"):

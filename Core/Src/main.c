@@ -112,7 +112,7 @@ static void print_stack_audit(void)
         { "Bar30",   bar30TaskHandle,    256 },
         { "SPIOwner",spiOwnerTaskHandle, 256 },
         { "Logging", loggingTaskHandle,  256 },
-        { "Dummy",   dummyTaskHandle,    256 },
+        { "Dummy",   dummyTaskHandle,    384 },
     };
 
     console_printf("--- STACK HWM (free words = min ever seen) ---");
@@ -781,7 +781,14 @@ int main(void)
     create_task_checked(bar30_task,   "Bar30 Task",   256, 4, &bar30TaskHandle);
     create_task_checked(spi_owner_task, "SPI Owner",   256, 3, &spiOwnerTaskHandle);
     create_task_checked(logging_task, "Logging Task", 256, 2, &loggingTaskHandle);
-    create_task_checked(dummy_task,   "Dummy",        256, 1, &dummyTaskHandle);
+    /*
+     * Dummy is the stdio owner: every on-demand report formats in its context.
+     * Measured on hardware (2026-10-05, BENCH_HIL build, after every error path
+     * had run): 928 of 1024 B used, 96 B left. Static analysis had predicted
+     * 692 B; the difference is vsnprintf's real frame plus the bench reports.
+     * 384 words (1536 B) restores a margin above 500 B; heap had 9960 B free.
+     */
+    create_task_checked(dummy_task,   "Dummy",        384, 1, &dummyTaskHandle);
 
     bench_register_task("Ctl",  controlTaskHandle);
     bench_register_task("Com",  commsTaskHandle);

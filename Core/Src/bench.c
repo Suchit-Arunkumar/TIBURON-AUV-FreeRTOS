@@ -656,6 +656,22 @@ static void mpu_stress(uint8_t which)
     uint8_t wake[2] = { MPU_PWR_MGMT_1, 0x00U };
     uint8_t who0 = 0;
     I2C_Status st = i2c_write(MPU_ADDR, wake, 2U);
+
+    if ((st == I2C_ERR_START) || (st == I2C_ERR_BUSY))
+    {
+        /* Bus wedged (first hardware run: START timeout here, after Bar30
+         * polling had worked at boot). Record the line state, run the
+         * 9-clock bus recovery, and try once more. */
+        uint32_t sr1 = I2C1->SR1, sr2 = I2C1->SR2, idr = GPIOB->IDR;
+        console_printf("B:i2c stuck sr1=0x%04lX sr2=0x%04lX scl=%lu sda=%lu, recovering",
+                       (unsigned long)sr1, (unsigned long)sr2,
+                       (unsigned long)((idr >> 8) & 1U), (unsigned long)((idr >> 9) & 1U));
+        i2c1_bus_recover();
+        vTaskDelay(pdMS_TO_TICKS(5));
+        st = i2c_write(MPU_ADDR, wake, 2U);
+        console_printf("B:i2c after recovery: %s", i2c_status_str(st));
+    }
+
     if (st == I2C_OK)
     {
         vTaskDelay(pdMS_TO_TICKS(50));               /* clock settles        */
