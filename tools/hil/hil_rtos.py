@@ -565,6 +565,8 @@ def test_mpu(c: Console, ctx: Ctx, rounds: int) -> Result:
             b = ints(kv(hit[1]))
             for k in ("n", "ewho", "etmp", "eacc", "e14"):
                 tot[k] += a[k]
+            if isinstance(b.get("pwr"), int) and b["pwr"] & 0x40:
+                r.ok(False, f"{mode}: PWR_MGMT_1 = 0x{b['pwr']:02X} after waking: still asleep, the wake write's data byte was lost")
             tot["i2cerr"] += b["i2cerr"]
             tot["stale"] += b["stale"]
             ctx.mpu = a.get("who")
@@ -853,7 +855,7 @@ class FakeSerial:
             self._emit(f"B:mpu queued {mode}")
             e = 3 if k == "i" else 0
             self._emit(f"B:mpu m={mode} n=500 who=0x68 ewho={e} etmp=0 eacc={e} e14=0")
-            self._emit(f"B:mpu2 m={mode} i2cerr=0 stale={e} t14=1712-1890")
+            self._emit(f"B:mpu2 m={mode} i2cerr=0 stale={e} t14=1712-1890 pwr=0x00")
         elif k == "P":
             self.sig ^= 1
             self._emit(f"B:pwm signature={self.sig}")

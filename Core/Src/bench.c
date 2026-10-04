@@ -667,6 +667,9 @@ static void mpu_stress(uint8_t which)
         return;
     }
 
+    uint8_t pwr = 0xFF;                 /* PWR_MGMT_1: 0x40 = still asleep */
+    (void)mpu_read_reg(rd, MPU_PWR_MGMT_1, &pwr, 1U, &e);
+
     uint32_t t14_min = 0xFFFFFFFFUL, t14_max = 0;
     uint8_t  b[14];
 
@@ -698,9 +701,9 @@ static void mpu_stress(uint8_t which)
                    name, (unsigned long)MPU_CYCLES, who0,
                    (unsigned long)e.e_who, (unsigned long)e.e_tmp,
                    (unsigned long)e.e_acc, (unsigned long)e.e_14);
-    console_printf("B:mpu2 m=%s i2cerr=%lu stale=%lu t14=%lu-%lu",
+    console_printf("B:mpu2 m=%s i2cerr=%lu stale=%lu t14=%lu-%lu pwr=0x%02X",
                    name, (unsigned long)e.i2c_err, (unsigned long)e.stale,
-                   (unsigned long)t14_min, (unsigned long)t14_max);
+                   (unsigned long)t14_min, (unsigned long)t14_max, pwr);
 }
 
 void bench_i2c_service(void)
