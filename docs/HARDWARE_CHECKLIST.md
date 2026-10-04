@@ -10,7 +10,7 @@ This checklist was written before the board was available, as the list of things
 | 2 | Clock source is HSE | **Done** | `CLK: OK (HSE bypass, 180 MHz)` on every boot |
 | 3 | Console end to end | **Done** | TX and RX both exercised by every bench key |
 | 4 | Fault latch survives warm reset | **Done** | `configASSERT` reported with file and line after a watchdog reset |
-| 5 | PWM 1500 µs at 50 Hz on all 8 channels | **7 / 8** | Per-channel widths exact on 7 pins, 20,000 µs period, return to 1,500 µs confirmed; PC8 not yet measured |
+| 5 | PWM 1500 µs at 50 Hz on all 8 channels | **Done** | Per-channel widths exact on all 8 pins, 20,000 µs period, return to 1,500 µs confirmed (TIM2 capture, not a scope) |
 | 6 | ESCs arm and hold neutral | Not done | No ESCs on the bench |
 | 7 | Failsafe within 500 ms | **Done, at the PWM-value level** | 520 ms (500 ms + one tick), 5 / 5, also with `comms_task` suspended; recovery needs 3 consecutive packets. Not scoped on an ESC line |
 | 8 | SD enumerates | Not done | No card fitted |

@@ -7,8 +7,8 @@ migration of [Nucleo_AUV_Bare_Metal](https://github.com/Suchit-Arunkumar/Nucleo_
 that changed the *scheduling and synchronisation* around the same drivers, then
 hardened them.
 
-**Verified on a NUCLEO-F446RE**: 18 of 18 hardware-in-the-loop tests pass on
-the final firmware, including the vehicle's real Pi-link path (USART1, DMA,
+**Verified on a NUCLEO-F446RE**: all 19 hardware-in-the-loop tests pass (18 in
+the final scripted run, plus all 8 PWM outputs measured exact), including the vehicle's real Pi-link path (USART1, DMA,
 IDLE interrupt) in loopback. Measured: 1.87 µs worst control-tick jitter under
 load, a failsafe that trips 520 ms after the last command even with the comms
 task suspended, and 0 CRC errors over a 60 s soak. Bring-up found three
@@ -91,7 +91,7 @@ The "consecutive" part was not true until the bench test was written: the counte
 | **RAM** | 29,736 B static, 22.7 % of 128 KiB (vehicle build) |
 | **Heap free** | 9,448 B of 22,528 B: measured, and equal to the minimum-ever-free |
 | **Link** | 62-byte frames, CRC-16/IBM-3740, USART1 115,200 baud, DMA RX with IDLE and half/full-transfer draining |
-| **Verified** | 18 / 18 HIL tests on a NUCLEO-F446RE ([§14](#14-hardware-in-the-loop-verification)) |
+| **Verified** | 19 / 19 HIL tests on a NUCLEO-F446RE ([§14](#14-hardware-in-the-loop-verification)) |
 | **Toolchain** | `arm-none-eabi-gcc` at `-O2`, 0 warnings in both builds |
 
 ---
@@ -353,7 +353,7 @@ Three details that are silent failures if missed:
 - **TIM8 is an advanced-control timer**: `BDTR.MOE` must be set or CH1–4 stay electrically disconnected regardless of `CCER`. TIM3 has no equivalent bit.
 - **The two prescalers differ on purpose.** TIM3 is on APB1 (90 MHz timer clock) → `PSC=89`; TIM8 is on APB2 (180 MHz) → `PSC=179`. Both `ARR=19999` for 1 µs resolution and a 20 ms frame. Equal prescalers would run thrusters 5–8 at twice the frame rate.
 
-**Measured:** with channel *k* driven at 1,100 + 100*k* µs and a jumper moved from PA15 (TIM2_CH1 input capture) across the outputs, every measured pin carried exactly its own channel's width and a 20,000 µs period, over 62–65 pulses each ([run `d53de2b`](tools/hil/reports/2026-10-05_d53de2b.md); see §14 for PC8).
+**Measured:** with channel *k* driven at 1,100 + 100*k* µs and a jumper moved from PA15 (TIM2_CH1 input capture) across the outputs, all eight pins carried exactly their own channel's width and a 20,000 µs period ([sweep](tools/hil/reports/2026-10-05_d53de2b.md), [PC8](tools/hil/reports/2026-10-05_02ee61a_pc8_manual.md)).
 
 All eight CCRs are written to 1500 µs **before** any output stage is enabled, then `EGR.UG` forces the shadow registers — so no ESC ever sees a frame built from the CCR reset value of 0.
 
@@ -518,7 +518,8 @@ and TIM2 input capture. The laptop presses console keys and keeps score. The
 Firmware `02ee61a`, 2026-10-05, ENABLE_IWDG defined for the run. Verbatim
 transcripts: [`02ee61a`](tools/hil/reports/2026-10-05_02ee61a.md) (final),
 [`b429abe`](tools/hil/reports/2026-10-05_b429abe.md),
-[`d53de2b`](tools/hil/reports/2026-10-05_d53de2b.md) (first run, PWM pin sweep).
+[`d53de2b`](tools/hil/reports/2026-10-05_d53de2b.md) (first run, PWM pin sweep),
+[PC8 manual check](tools/hil/reports/2026-10-05_02ee61a_pc8_manual.md).
 
 | Test | Result | Measured |
 |---|---|---|
@@ -537,14 +538,17 @@ transcripts: [`02ee61a`](tools/hil/reports/2026-10-05_02ee61a.md) (final),
 | DMA exact-wrap | PASS | IDLE-only: 0 / 256 bytes (defect reproduced); with HT/TC: 256 / 256 |
 | I²C under preemption (MPU-6050) | PASS | RM0390 sequence: 4,000 reads, 0 errors; existing `i2c_read()`: 8 bus errors in 4,000; 0 wrong values either way |
 | Soak, 60 s | PASS | 3,013 frames, 0 CRC failures, 3,013 / 3,013 exact, 0 link drops, 0 resets; CPU idle 44.6 % |
-| Eight PWM outputs | 7 / 8 (`d53de2b`) | PB4, PB5, PB0, PB1, PC6, PC7, PC9 exact at their channel widths, period 20,000 µs; PC8 see below |
+| Eight PWM outputs | PASS, 8 / 8 | PB4, PB5, PB0, PB1, PC6, PC7, PC9 exact at their channel widths in the sweep (`d53de2b`); PC8 exact in a manual check (`02ee61a`); period 20,000 µs on all 8 |
 | Stacks after error paths | PASS | all 8 tasks ≥ 256 B free; MSP 208 B |
 | Fault latch | PASS | `configASSERT` latched in `.noinit`, reported after the watchdog reset with file and line |
 | Watchdog, hung `control_task` | PASS | 3 / 3 resets in 1,055–1,121 ms, cause `IWDG`; LSI ≈ 29 kHz |
 
-**PC8 (thruster 7).** In the PWM sweep the jumper landed on the neighbouring
-pin and read thruster 5's 1,500 µs signature, which the test correctly
-rejected. PC8 is on the same timer (TIM8 CH3) as three channels that passed.
+**PC8 (thruster 7).** In the scripted sweep the jumper landed on the
+neighbouring pin and read thruster 5's 1,500 µs signature, which the test
+correctly rejected. A manual check on the final firmware, with the same
+capture and the same bench keys, then read PC8 at exactly 1,700 µs over 52
+pulses and back at 1,500 µs with the signature off
+([transcript](tools/hil/reports/2026-10-05_02ee61a_pc8_manual.md)).
 
 ### Running it
 
@@ -591,7 +595,7 @@ Every number is measured on a NUCLEO-F446RE ([§14](#14-hardware-in-the-loop-ver
 | DMA exact-wrap defect | 0 / 256 bytes before the fix, 256 / 256 after | HIL |
 | Parser robustness | 257 frames recovered through junk, decoys and split IDLE events | HIL |
 | **Peripherals, measured** | | |
-| PWM outputs | 7 of 8 pins measured exact at 1 µs resolution, 20,000 µs period, 62–65 pulses each | TIM2 capture |
+| PWM outputs | 8 / 8 pins exact at their channel width at 1 µs resolution, 20,000 µs period | TIM2 capture |
 | I²C under preemption | 4,000 MPU-6050 reads, 0 errors (RM0390 sequence); 14-byte burst 1,570 µs at 100 kHz | HIL |
 | **Memory** | | |
 | Flash, vehicle build | 34,916 B, 6.7 % of 512 KiB | `arm-none-eabi-size` |
@@ -610,7 +614,6 @@ Run on hardware: everything in §14. Not reached by the bench:
 - **The SD card and the OLED** (not fitted). Every figure in §4 and §5 is computed. With no card, the logger's block writes fail and are counted.
 - **The VN-200, the Wayfinder DVL and the Bar30** (not fitted). Their tasks were exercised only on the absent-sensor path; the parsers have not seen real traffic.
 - **ESCs and thrusters.** Outputs were measured at the pin, not driving an ESC.
-- **PC8 (thruster 7) PWM**, see §14.
 - **The in-water behaviour**: PID gains, thruster calibration, the allocation matrix against real thrust.
 - **Remaining checklist items** in [`docs/HARDWARE_CHECKLIST.md`](docs/HARDWARE_CHECKLIST.md) that need the parts above (SD timing, OLED refresh, ESC arming).
 
