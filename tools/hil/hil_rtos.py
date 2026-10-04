@@ -691,6 +691,13 @@ def test_fault_latch(c: Console, ctx: Ctx) -> Result:
     if ctx.iwdg:
         r.note("watchdog enabled: the halted board should reset itself")
         hit = c.wait(lambda ln: ln == "BOOT OK", 6, m)
+        if hit is None:
+            # BKPT halts the core instead of faulting if the debug unit is
+            # still enabled from flashing, and the IWDG is frozen on halt.
+            r.note("no self-reset in 6 s: core halted at the breakpoint (debug still enabled since flashing; "
+                   "unplug/replug USB before a run to avoid this)")
+            print("\n  >>> Board halted at the breakpoint. Press RESET (B2) now. Waiting 30 s ...", flush=True)
+            hit = c.wait(lambda ln: ln == "BOOT OK", 30, m)
     else:
         print("\n  >>> Board halted on purpose. Press RESET (B2) now. Waiting 30 s ...", flush=True)
         hit = c.wait(lambda ln: ln == "BOOT OK", 30, m)
