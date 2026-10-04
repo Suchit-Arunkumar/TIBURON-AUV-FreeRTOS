@@ -101,7 +101,45 @@ static uint32_t wait_flag(volatile uint32_t *reg, uint32_t flag)
         }
     }
 
-    return 0UL;
+    /*
+     * One last look before declaring a timeout. Found on hardware: the I2C
+     * task (priority 4) is routinely preempted for 5.4 ms by comms_task's
+     * blocking telemetry send, longer than the whole 2.5 ms budget. It woke
+     * past the deadline, left the loop without polling, and reported a
+     * timeout on a phase the peripheral had finished long before. The
+     * caller's abort then sent STOP mid-transfer and wedged the bus: 99 % of
+     * MPU-6050 transfers failed, with 0 wrong values among those that
+     * completed. Clock stretching holds the bus while we're away, so a late
+     * poll is always safe.
+     */
+    int32_t r = poll_once(reg, flag);
+    return (r == 1) ? 1UL : 0UL;
+}
+
+/*
+ * Abort an in-flight transfer and leave the peripheral usable.
+ *
+ * STOP alone is not enough after a timeout: if it lands at the wrong point
+ * in a transfer the F4's I2C can latch BUSY with both lines idle high
+ * (seen on hardware: SR2 = 0x0002, SCL = SDA = 1), and every later START
+ * then times out. Wait briefly for STOP to clear; if BUSY is still set,
+ * reset and reconfigure the peripheral.
+ */
+static I2C_Status i2c_fail(I2C_Status st)
+{
+    I2C1->CR1 |= I2C_CR1_STOP;
+    I2C1->CR1 &= ~I2C_CR1_POS;
+
+    uint32_t start = micros();
+    while ((I2C1->CR1 & I2C_CR1_STOP) && ((micros() - start) < 1000UL))
+    {
+    }
+
+    if (I2C1->SR2 & I2C_SR2_BUSY)
+    {
+        i2c1_init();                 /* SWRST + full reconfigure */
+    }
+    return st;
 }
 
 void i2c1_init(void)
@@ -189,8 +227,7 @@ I2C_Status i2c_write(uint8_t addr, uint8_t *data, uint8_t len)
     // 2. wait for SB flag in SR1
 	if (!wait_flag(&I2C1->SR1, I2C_SR1_SB))
 	{
-		I2C1->CR1 |= I2C_CR1_STOP;
-		return I2C_ERR_START;
+		return i2c_fail(I2C_ERR_START);
 	}
 
 	// 3. send slave address with write bit (addr << 1 | 0)
@@ -199,8 +236,7 @@ I2C_Status i2c_write(uint8_t addr, uint8_t *data, uint8_t len)
 	// 4. wait for ADDR flag in SR1
 	if (!wait_flag(&I2C1->SR1, I2C_SR1_ADDR))
 	{
-		I2C1->CR1 |= I2C_CR1_STOP;
-		return I2C_ERR_ADDR_NACK;
+		return i2c_fail(I2C_ERR_ADDR_NACK);
 	}
 
 	// 5. clear ADDR flag by reading SR1 then SR2
@@ -215,8 +251,7 @@ I2C_Status i2c_write(uint8_t addr, uint8_t *data, uint8_t len)
 
 		if (!wait_flag(&I2C1->SR1, I2C_SR1_TXE))
 		{
-			I2C1->CR1 |= I2C_CR1_STOP;
-			return I2C_ERR_TXE;
+			return i2c_fail(I2C_ERR_TXE);
 		}
 		I2C1->DR = data[i] ;
 
@@ -233,8 +268,7 @@ I2C_Status i2c_write(uint8_t addr, uint8_t *data, uint8_t len)
 	 */
 	if (!wait_flag(&I2C1->SR1, I2C_SR1_BTF))
 	{
-		I2C1->CR1 |= I2C_CR1_STOP;
-		return I2C_ERR_TXE;
+		return i2c_fail(I2C_ERR_TXE);
 	}
 
 	I2C1->CR1 |= I2C_CR1_STOP;
@@ -251,8 +285,7 @@ I2C_Status i2c_read(uint8_t addr, uint8_t *buf, uint8_t len)
     // 2. wait for SB flag in SR1
 	if (!wait_flag(&I2C1->SR1, I2C_SR1_SB))
 	{
-		I2C1->CR1 |= I2C_CR1_STOP;
-		return I2C_ERR_START;
+		return i2c_fail(I2C_ERR_START);
 	}
 
     // 3. send slave address with read bit (addr << 1 | 1)
@@ -262,8 +295,7 @@ I2C_Status i2c_read(uint8_t addr, uint8_t *buf, uint8_t len)
     // 4. wait for ADDR flag in SR1
 	if (!wait_flag(&I2C1->SR1, I2C_SR1_ADDR))
 	{
-		I2C1->CR1 |= I2C_CR1_STOP;
-		return I2C_ERR_ADDR_NACK;
+		return i2c_fail(I2C_ERR_ADDR_NACK);
 	}
 
     // 5. clear ADDR flag by reading SR1 then SR2
@@ -281,8 +313,7 @@ I2C_Status i2c_read(uint8_t addr, uint8_t *buf, uint8_t len)
 	    }
 	    if (!wait_flag(&I2C1->SR1, I2C_SR1_RXNE))
 	    {
-	        I2C1->CR1 |= I2C_CR1_STOP;
-	        return I2C_ERR_RXNE;
+	        return i2c_fail(I2C_ERR_RXNE);
 	    }
 	    buf[i] = I2C1->DR;
 	}
@@ -313,9 +344,7 @@ I2C_Status i2c_read(uint8_t addr, uint8_t *buf, uint8_t len)
  */
 static I2C_Status rm_fail(I2C_Status st)
 {
-    I2C1->CR1 |= I2C_CR1_STOP;
-    I2C1->CR1 &= ~I2C_CR1_POS;
-    return st;
+	return i2c_fail(st);
 }
 
 I2C_Status i2c_read_rm(uint8_t addr, uint8_t *buf, uint8_t len)
