@@ -223,6 +223,20 @@ I2C_Status i2c_write(uint8_t addr, uint8_t *data, uint8_t len)
 	}
 
 	// 7. STOP
+	/*
+	 * Wait for BTF before STOP. With the last byte just written to DR, the
+	 * byte before it is still shifting out; a STOP set now ends the transfer
+	 * after that byte and the last one is never sent (RM0390 master
+	 * transmitter, EV8_2). Single-byte writes got away with it. Found on the
+	 * bare-metal tree's first hardware run: the MPU-6050 wake command
+	 * {0x6B, 0x00} lost its 0x00 and the sensor stayed asleep.
+	 */
+	if (!wait_flag(&I2C1->SR1, I2C_SR1_BTF))
+	{
+		I2C1->CR1 |= I2C_CR1_STOP;
+		return I2C_ERR_TXE;
+	}
+
 	I2C1->CR1 |= I2C_CR1_STOP;
 
 	return I2C_OK;
