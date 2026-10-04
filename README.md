@@ -21,8 +21,8 @@ flagged as untested. Results are in
 developed and verified on a bench rig; not yet integrated on the vehicle. At
 SAUVC 2026 the VN-200 IMU and the Wayfinder DVL ran on the Raspberry Pi, and
 the team's RP2350 (Pico 2) firmware drove all 8 ESCs and thrusters and ran the
-Bar30 depth sensor, SD logging and a TFT display, whose 62-byte frame and CRC-16 this
-firmware speaks unchanged. The control law in `control_loop.c` (PID, 6×8 thrust
+Bar30 depth sensor, SD logging and a TFT display. This firmware speaks that
+firmware's 62-byte frame and CRC-16 unchanged. The control law in `control_loop.c` (PID, 6×8 thrust
 allocation, command-timeout failsafe) is ported from that firmware's tuning
 sketch. The STM32 drivers here for the VN-200, DVL, Bar30, SD card and OLED are
 separate register-level implementations, exercised on the bench only with
