@@ -609,6 +609,9 @@ typedef I2C_Status (*ReadFn)(uint8_t, uint8_t *, uint8_t);
 typedef struct
 {
     uint32_t i2c_err, stale, e_who, e_tmp, e_acc, e_14;
+    int32_t  first_k;                  /* cycle of the first bus error, -1 none */
+    I2C_Status first_st;
+    uint8_t  first_reg;
 } MpuErr;
 
 static I2C_Status mpu_read_reg(ReadFn rd, uint8_t reg, uint8_t *buf, uint8_t n,
@@ -617,6 +620,11 @@ static I2C_Status mpu_read_reg(ReadFn rd, uint8_t reg, uint8_t *buf, uint8_t n,
     I2C_Status st = i2c_write(MPU_ADDR, &reg, 1U);
     if (st != I2C_OK)
     {
+        if (e->first_st == I2C_OK)
+        {
+            e->first_st  = st;
+            e->first_reg = reg;
+        }
         return st;
     }
     /* A byte left in DR by the previous transfer: the signature of a read
@@ -626,7 +634,13 @@ static I2C_Status mpu_read_reg(ReadFn rd, uint8_t reg, uint8_t *buf, uint8_t n,
     {
         e->stale++;
     }
-    return rd(MPU_ADDR, buf, n);
+    st = rd(MPU_ADDR, buf, n);
+    if ((st != I2C_OK) && (e->first_st == I2C_OK))
+    {
+        e->first_st  = st;
+        e->first_reg = reg;
+    }
+    return st;
 }
 
 static int16_t be16(const uint8_t *b) { return (int16_t)(((uint16_t)b[0] << 8) | b[1]); }
@@ -652,6 +666,7 @@ static void mpu_stress(uint8_t which)
     const char *name = (which == 2U) ? "rm0390" : "legacy";
     MpuErr e;
     memset(&e, 0, sizeof(e));
+    e.first_k = -1;
 
     uint8_t wake[2] = { MPU_PWR_MGMT_1, 0x00U };
     uint8_t who0 = 0;
@@ -691,6 +706,10 @@ static void mpu_stress(uint8_t which)
 
     for (uint32_t k = 0; k < MPU_CYCLES; k++)
     {
+        if ((e.first_k < 0) && (e.first_st != I2C_OK))
+        {
+            e.first_k = (int32_t)k - 1;
+        }
         uint8_t who = 0;
         if (mpu_read_reg(rd, MPU_WHO_AM_I, &who, 1U, &e) != I2C_OK) e.i2c_err++;
         else if (who != who0)                                         e.e_who++;
@@ -720,6 +739,11 @@ static void mpu_stress(uint8_t which)
     console_printf("B:mpu2 m=%s i2cerr=%lu stale=%lu t14=%lu-%lu pwr=0x%02X",
                    name, (unsigned long)e.i2c_err, (unsigned long)e.stale,
                    (unsigned long)t14_min, (unsigned long)t14_max, pwr);
+    if (e.first_st != I2C_OK)
+    {
+        console_printf("B:mpu3 m=%s first error: cycle %ld reg 0x%02X: %s",
+                       name, (long)e.first_k, e.first_reg, i2c_status_str(e.first_st));
+    }
 }
 
 void bench_i2c_service(void)

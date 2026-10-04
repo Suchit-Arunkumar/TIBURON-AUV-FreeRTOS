@@ -565,7 +565,7 @@ def test_mpu(c: Console, ctx: Ctx, rounds: int) -> Result:
                 return r.skip("no MPU-6050 answering at 0x68 on PB8/PB9")
             lines = [ln for _, ln in c.since(m)]
             for ln in lines:
-                if ln.startswith("B:i2c"):
+                if ln.startswith("B:i2c") or ln.startswith("B:mpu3"):
                     r.note(ln)
             a = ints(kv(next(ln for ln in lines if ln.startswith("B:mpu m="))))
             b = ints(kv(hit[1]))
@@ -597,8 +597,7 @@ def test_mpu(c: Console, ctx: Ctx, rounds: int) -> Result:
     else:
         r.note("i2c_read() (current driver) showed no errors in this run")
     lo = results["rm0390"]["t14"][0]
-    r.note(f"14-byte burst floor {lo} us vs ~1.7 ms predicted for 100 kHz (pointer write + 15 bytes x 9 bits): "
-           "confirms the I2C clock, CCR = 225")
+    r.note(f"14-byte burst floor {lo} us vs ~1.55 ms computed for 100 kHz: confirms the I2C clock, CCR = 225")
     return r
 
 
@@ -655,6 +654,7 @@ def test_pwm(c: Console, ctx: Ctx, interactive: bool) -> Result:
     if not interactive:
         return r.skip("--no-pwm")
     c.command("P", "B:pwm signature=1")
+    measured = 0
     try:
         for ch, (pin, where) in enumerate(PWM_PINS):
             exp = 1100 + 100 * ch
@@ -663,6 +663,7 @@ def test_pwm(c: Console, ctx: Ctx, interactive: bool) -> Result:
             if input().strip().lower() == "s":
                 r.note(f"ch{ch} {pin}: skipped by operator")
                 continue
+            measured += 1
             c.block("p", "B:pwm", "B:pwm")       # discard the window that spans the move
             time.sleep(1.2)
             got = c.block("p", "B:pwm", "B:pwm")
@@ -679,6 +680,8 @@ def test_pwm(c: Console, ctx: Ctx, interactive: bool) -> Result:
             r.ok(abs(plo - 20000) <= 1 and abs(phi - 20000) <= 1, f"ch{ch} {pin}: period {plo}..{phi} us (expect 20000)")
     finally:
         c.command("P", "B:pwm signature=0")
+    if measured == 0:
+        return r.skip("all eight pins skipped by the operator")
     time.sleep(0.3)
     c.block("p", "B:pwm", "B:pwm")
     time.sleep(1.2)
