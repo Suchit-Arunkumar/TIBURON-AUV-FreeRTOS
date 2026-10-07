@@ -2,6 +2,7 @@
 
 #include "stm32f446xx.h"
 #include "cmsis_gcc.h"
+#include "timer_pwm.h"
 
 #include <stdio.h>
 
@@ -59,6 +60,7 @@ static const char *kind_str(uint32_t kind)
         case FAULT_STACK_OVERFLOW: return "STACK OVERFLOW";
         case FAULT_MALLOC_FAILED:  return "MALLOC FAILED";
         case FAULT_INIT_FAILED:    return "INIT FAILED";
+        case FAULT_HARDFAULT:      return "HARDFAULT";
         default:                   return "UNKNOWN";
     }
 }
@@ -76,24 +78,38 @@ void fault_latch_fail(FaultKind kind,
      */
     __disable_irq();
 
-    g_fault_latch.kind = (uint32_t)kind;
-    g_fault_latch.file = file;
-    g_fault_latch.line = line;
-    g_fault_latch.pc   = pc;
-    copy_detail(g_fault_latch.detail, detail);
+    /* Before anything else: a halted board must not keep the thrusters
+     * running at whatever they were last commanded. */
+    pwm_fault_neutral();
 
-    /* Magic written last, so a reset landing mid-update cannot leave a
-     * half-filled record that reads as valid. */
-    g_fault_latch.magic = FAULT_LATCH_MAGIC;
+    /*
+     * First fault wins. A valid latch at this point can only be from this
+     * run (main reports and clears the previous run's one at boot), so a
+     * second fault raised while handling the first must not replace it.
+     */
+    if (!fault_latch_valid())
+    {
+        g_fault_latch.kind = (uint32_t)kind;
+        g_fault_latch.file = file;
+        g_fault_latch.line = line;
+        g_fault_latch.pc   = pc;
+        copy_detail(g_fault_latch.detail, detail);
+
+        /* Magic written last, so a reset landing mid-update cannot leave
+         * a half-filled record that reads as valid. */
+        g_fault_latch.magic = FAULT_LATCH_MAGIC;
+    }
 
     __DSB();
 
     /*
-     * Break to the debugger if one is attached. With no debugger this
-     * executes as a no-op on Cortex-M4 rather than escalating, so the
-     * spin below is what actually holds the board.
+     * Break into the debugger, but only if one is enabled. Without one,
+     * BKPT is not a no-op on Cortex-M4: it escalates to a HardFault.
      */
-    __BKPT(0);
+    if (CoreDebug->DHCSR & CoreDebug_DHCSR_C_DEBUGEN_Msk)
+    {
+        __BKPT(0);
+    }
 
     for (;;)
     {

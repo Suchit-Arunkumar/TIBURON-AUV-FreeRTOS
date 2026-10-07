@@ -21,4 +21,11 @@ void pwm_set_us(uint8_t channel, uint16_t us);
 /* All eight to 1500 us. Used by the failsafe path. */
 void pwm_all_neutral(void);
 
+/*
+ * Fault path version of pwm_all_neutral(): plain register writes, no
+ * calls, no RTOS. Safe from HardFault and the fault latch. The new value
+ * reaches the pins at the start of the next 20 ms frame.
+ */
+void pwm_fault_neutral(void);
+
 #endif

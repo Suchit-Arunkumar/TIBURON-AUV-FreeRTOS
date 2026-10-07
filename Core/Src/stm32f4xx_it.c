@@ -30,6 +30,8 @@
 #include "FreeRTOS.h"
 #include "task.h"
 #include "bench.h"
+#include "fault_latch.h"
+#include "timer_pwm.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 /* USER CODE END Includes */
@@ -78,75 +80,73 @@
   */
 void NMI_Handler(void)
 {
-  /* USER CODE BEGIN NonMaskableInt_IRQn 0 */
+  /* Nothing in this design raises an NMI (the clock security system is
+   * off), but if one arrives, stop the thrusters before halting. */
+  pwm_fault_neutral();
 
-  /* USER CODE END NonMaskableInt_IRQn 0 */
-  /* USER CODE BEGIN NonMaskableInt_IRQn 1 */
-   while (1)
-  {
-  }
-  /* USER CODE END NonMaskableInt_IRQn 1 */
-}
-
-/**
-  * @brief This function handles Hard fault interrupt.
-  */
-void HardFault_Handler(void)
-{
-  /* USER CODE BEGIN HardFault_IRQn 0 */
-
-  /* USER CODE END HardFault_IRQn 0 */
   while (1)
   {
-    /* USER CODE BEGIN W1_HardFault_IRQn 0 */
-    /* USER CODE END W1_HardFault_IRQn 0 */
   }
 }
 
-/**
-  * @brief This function handles Memory management fault.
-  */
-void MemManage_Handler(void)
+/*
+ * CPU faults.
+ *
+ * Before this, all four handlers were bare spin loops: the board froze
+ * with TIM3/TIM8 still producing whatever pulse widths were last set, so
+ * a crash mid-manoeuvre left the thrusters running. Now every path sets
+ * neutral first, then records the fault in the .noinit latch so the next
+ * boot prints where it happened.
+ *
+ * MemManage, BusFault and UsageFault are not enabled in SCB->SHCSR, so
+ * they escalate and arrive here as a HardFault. They share the same entry
+ * in case they are enabled later.
+ *
+ * The entry is naked (no compiler prologue) so it can look at the stack
+ * the faulting code was using. Bit 2 of EXC_RETURN in LR says which one:
+ * 0 = MSP (an ISR faulted), 1 = PSP (a task faulted). The hardware pushed
+ * r0-r3, r12, lr, pc, xpsr there, so frame[6] is the faulting PC.
+ */
+#define FAULT_ENTRY_ASM          \
+    "tst   lr, #4          \n"   \
+    "ite   eq              \n"   \
+    "mrseq r0, msp         \n"   \
+    "mrsne r0, psp         \n"   \
+    "b     fault_from_frame\n"
+
+static void hex8(char *out, uint32_t v)
 {
-  /* USER CODE BEGIN MemoryManagement_IRQn 0 */
+    static const char digits[] = "0123456789ABCDEF";
 
-  /* USER CODE END MemoryManagement_IRQn 0 */
-  while (1)
-  {
-    /* USER CODE BEGIN W1_MemoryManagement_IRQn 0 */
-    /* USER CODE END W1_MemoryManagement_IRQn 0 */
-  }
+    for (int i = 7; i >= 0; i--)
+    {
+        out[i] = digits[v & 0xFU];
+        v >>= 4;
+    }
 }
 
-/**
-  * @brief This function handles Pre-fetch fault, memory access fault.
-  */
-void BusFault_Handler(void)
+void fault_from_frame(const uint32_t *frame) __attribute__((used, noreturn));
+void fault_from_frame(const uint32_t *frame)
 {
-  /* USER CODE BEGIN BusFault_IRQn 0 */
+    /*
+     * Neutral before touching the frame. If the fault came from a blown
+     * stack, reading it can fault again, and a fault inside the HardFault
+     * handler locks the core up - with the timers still running.
+     */
+    pwm_fault_neutral();
 
-  /* USER CODE END BusFault_IRQn 0 */
-  while (1)
-  {
-    /* USER CODE BEGIN W1_BusFault_IRQn 0 */
-    /* USER CODE END W1_BusFault_IRQn 0 */
-  }
+    /* CFSR says what kind of fault, HFSR whether it escalated. */
+    char detail[] = "C=00000000 H=00000000";
+    hex8(&detail[2],  SCB->CFSR);
+    hex8(&detail[13], SCB->HFSR);
+
+    fault_latch_fail(FAULT_HARDFAULT, __FILE__, 0U, frame[6], detail);
 }
 
-/**
-  * @brief This function handles Undefined instruction or illegal state.
-  */
-void UsageFault_Handler(void)
-{
-  /* USER CODE BEGIN UsageFault_IRQn 0 */
-
-  /* USER CODE END UsageFault_IRQn 0 */
-  while (1)
-  {
-    /* USER CODE BEGIN W1_UsageFault_IRQn 0 */
-    /* USER CODE END W1_UsageFault_IRQn 0 */
-  }
-}
+__attribute__((naked)) void HardFault_Handler(void)  { __asm volatile (FAULT_ENTRY_ASM); }
+__attribute__((naked)) void MemManage_Handler(void)  { __asm volatile (FAULT_ENTRY_ASM); }
+__attribute__((naked)) void BusFault_Handler(void)   { __asm volatile (FAULT_ENTRY_ASM); }
+__attribute__((naked)) void UsageFault_Handler(void) { __asm volatile (FAULT_ENTRY_ASM); }
 
 /**
   * @brief This function handles System service call via SWI instruction.

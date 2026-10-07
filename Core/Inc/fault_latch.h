@@ -29,7 +29,8 @@ typedef enum
     FAULT_ASSERT          = 1,   /* configASSERT(x) evaluated false      */
     FAULT_STACK_OVERFLOW  = 2,   /* vApplicationStackOverflowHook        */
     FAULT_MALLOC_FAILED   = 3,   /* vApplicationMallocFailedHook         */
-    FAULT_INIT_FAILED     = 4    /* a queue or task failed to be created */
+    FAULT_INIT_FAILED     = 4,   /* a queue or task failed to be created */
+    FAULT_HARDFAULT       = 5    /* CPU fault; pc is the faulting address */
 } FaultKind;
 
 typedef struct
@@ -44,7 +45,12 @@ typedef struct
 
 extern FaultLatch g_fault_latch;
 
-/* Record and halt. Never returns. */
+/*
+ * Thrusters to neutral, record, halt. Never returns.
+ *
+ * The first fault of a run wins: if something is already latched (a
+ * second fault while handling the first), it is not overwritten.
+ */
 void fault_latch_fail(FaultKind kind,
                       const char *file,
                       uint32_t line,
