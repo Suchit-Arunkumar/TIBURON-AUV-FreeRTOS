@@ -47,8 +47,8 @@ Three levels of evidence, kept separate on purpose:
 | Level | What it covers |
 |---|---|
 | **On hardware** (bench, 5 Oct 2026, [`tools/hil/hil_rtos_report.md`](tools/hil/hil_rtos_report.md)) | Clock tree, 50 Hz control timing and jitter, Pi link over the real UART (loopback), resync through junk, bad-CRC rejection, the command-timeout failsafe (including with the comms task suspended), 3-packet recovery, the DMA wrap bug and its fix, I²C reads under preemption, a 60 s soak, stack high-water marks, the fault latch, the watchdog. 18 of 19 tests passed; the PWM capture test was skipped (no jumper fitted). |
-| **On the PC, against the datasheets** ([`tests/host`](tests/host)) | VN-200 packet parsing and CRC, Bar30 CRC-4 and compensation (against the datasheet's worked example), DVL frame parsing, analog-sensor conversion, and the sensor-switching logic. 211 checks. |
-| **Built, not yet run** | Everything written after that bench run: the IMU and depth tasks, the BNO085, Bar30 and analog drivers on this board, the new packets, DMA transmit, the fault-handler change. Each is marked `UNTESTED` in its source until it has been run. |
+| **On the PC, against the datasheets** ([`tests/host`](tests/host)) | VN-200 packet parsing and CRC, Bar30 CRC-4 and compensation (against the datasheet's worked example), DVL frame parsing, analog-sensor conversion, the sensor-switching logic, and the SD log start search. 220 checks. |
+| **Built, not yet run** | Everything written after that bench run: the IMU and depth tasks, the BNO085, Bar30 and analog drivers on this board, the new packets, DMA transmit, the fault-handler change, the TFT display, the SD log changes. Each is marked `UNTESTED` in its source until it has been run. |
 
 The BNO085, Bar30 and analog sensor have all been run on the team's Pico
 firmware, so the sensors, wiring and settings are known good. The STM32 drivers
@@ -77,8 +77,8 @@ the water.
 | Wayfinder DVL (via RS-232 converter) | UART4, 115200, RX DMA1 S2 | PA0 / PA1 |
 | Bar30 (0x76) and BNO085 (0x4A/0x4B) | I2C1, 400 kHz | PB8 SCL / PB9 SDA |
 | Analog pressure sensor | ADC1 channel 4, through a 2:1 divider | PA4 |
-| SD card + display | SPI2 | PB13 / PB14 / PB15, SD CS PC4 |
-| Display control | GPIO | CS PC5, DC PC0, RST PC1 |
+| SD card + ILI9341 TFT | SPI2 | PB13 / PB14 / PB15, SD CS PC4 |
+| TFT control | GPIO | CS PC5, DC PC0, RST PC1 |
 | Thrusters 1–4 | TIM3 CH1–4 | PB4, PB5, PB0, PB1 |
 | Thrusters 5–8 | TIM8 CH1–4 | PC6, PC7, PC8, PC9 |
 | Heartbeat LED | GPIO | PA5 |
@@ -100,7 +100,7 @@ Pin details that broke things before they were caught:
 ```
 Core/        tasks, main, FreeRTOS config, interrupt handlers, console, fault latch
 Drivers/     register-level peripheral drivers: uart, i2c, spi, timers, watchdog
-Devices/     one folder per external device: vn200, bno085, bar30, adc_depth, dvl, oled
+Devices/     one folder per external device: vn200, bno085, bar30, adc_depth, dvl, ili9341
 Protocol/    Pi packet framing, CRC-16, ring buffer, SD card + log layout
 Middlewares/ FreeRTOS kernel; CEVA's SH-2 library for the BNO085 (unmodified)
 tests/host/  PC unit tests for the parsers and maths
@@ -138,7 +138,7 @@ readings and are not inputs to its controller.
 | 4 | `imu_task` | USART3 RX, or a 5 ms timeout to poll the BNO085 | 100 Hz | 1.5 KB | VN-200 + BNO085 → `imuQueue` |
 | 4 | `depth_task` | `vTaskDelayUntil`, 20 ms | ~35 Hz | 1.5 KB | Bar30 + analog sensor → `depthQueue` |
 | 4 | `dvl_task` | UART4 RX | per ping | 1 KB | Wayfinder frames → `dvlQueue` |
-| 3 | `spi_owner_task` | its request queue, or 500 ms timeout | — | 1 KB | the only task that touches SPI2 (SD card, display) |
+| 3 | `spi_owner_task` | its request queue, or 500 ms timeout | 2 Hz display | 1.5 KB | the only task that touches SPI2 (SD card, TFT) |
 | 2 | `logging_task` | `logQueue` | 5 Hz | 1 KB | packs log records into 512-byte SD blocks |
 | 1 | `dummy_task` | `consoleQueue`, or 50 ms timeout | — | 1.5 KB | the only task that prints; heartbeat LED; `s` / `h` reports |
 | 0 | idle | | | | FreeRTOS's own |
@@ -459,18 +459,35 @@ A mutex would be the better choice if a high-priority task ever needed the bus
 directly: then a priority-3 owner serving it through a queue is priority
 inversion with no inheritance. Nothing at priority ≥ 4 touches SPI.
 
-**Logging.** Every 10th control tick (5 Hz) a 40-byte record (time, pose, PWM,
-armed, link, CRC) goes to `logging_task`, which packs 12 of them into one
-512-byte SD block with a small header. Writing each record as its own block
-would program 12.8× more flash and hit the card's 250 ms worst-case busy time 5
-times a second. The cost: up to 2.4 s of records are lost on a sudden power cut
-(a disarm or failsafe flushes the block early).
+**Logging.** Every 10th control tick (5 Hz) a 68-byte record goes to
+`logging_task`: time, the Pi's pose, PWM ×8, armed, link, the IMU attitude and
+which IMU it came from, the onboard depth and its source, the DVL velocity, and
+a CRC. `logging_task` packs 7 of them into one 512-byte SD block behind a
+16-byte header. Writing each record as its own block would program 7× more
+flash and hit the card's 250 ms worst-case busy time 5 times a second. The
+cost: up to 1.4 s of records are lost on a sudden power cut (a disarm or
+failsafe flushes the block early).
+
+Blocks are raw (no filesystem) from block 100 on. At start-up a **binary
+search** finds the first block without the log marker, about 22 reads even with
+thousands of blocks, and the new run starts there, so the last dive's log
+survives the next power-up. Each run's block numbers start again at 0, which is
+how runs are told apart offline. Older SDSC cards (2 GB and under) take byte
+addresses instead of block numbers; the card-capacity bit read at start-up
+decides which.
+
+**Display.** An ILI9341 320×240 TFT shows a text status screen at 2 Hz:
+armed/link/failsafe, the IMU source and attitude, depth and its source, DVL
+velocity or "no bottom lock", every sensor's state, SD counters and the 8 PWM
+outputs. The screen remembers what each character cell shows and redraws only
+the cells that changed: a full redraw takes ~220 ms at 5.6 MHz and would hold
+up SD writes.
 
 ---
 
 ## 12. Memory, stacks and timing
 
-Release build (`-Os`): **41 KB flash** of 512 KB, **36.5 KB RAM** of 128 KB
+Release build (`-Os`): **43 KB flash** of 512 KB, **36.4 KB RAM** of 128 KB
 (of which the FreeRTOS heap is 22 KB, the VN-200 ring 4 KB).
 
 **All allocation happens before the scheduler starts**: tasks and queues are
@@ -529,6 +546,8 @@ The interesting ones, and how each was found.
 | Release configuration had only CubeMX's default include paths | it had never been able to build; the "vehicle build" didn't exist |
 | Default build had bench hooks on and the watchdog off | the easiest build to flash was the unsafe one |
 | Bar30 initialised once at boot | a sensor plugged in later was read with an all-zero calibration |
+| SD log always started at block 100 | every power-up overwrote the previous run's log |
+| SD card capacity bit never checked | an SDSC card (2 GB and under) would have been written at the wrong addresses |
 
 Earlier fixes from the bare-metal → RTOS move (static review): the PLL register
 OR-ed onto its reset value (wrong clock), APB1 over its limit, `HSE_VALUE`
@@ -572,8 +591,9 @@ failsafe state), `?` help.
 - Bench-run everything marked `UNTESTED` (§1), then rerun `hil_rtos.py`.
 - VN-200 and DVL on real hardware; confirm the DVL checksum variant.
 - Check the BNO085's axis signs against the VN-200.
-- Replace the OLED with the ILI9341 TFT; make the SD log start after the last
-  run instead of overwriting it; add sensor readings to the log record.
+- Check the TFT start-up sequence on the real screen (it follows Adafruit's
+  library; the ILI9341 datasheet isn't in `docs/datasheets` yet).
+- Write a small script to read the raw log blocks off the SD card.
 - Update the Pi parser for packets `0x03` and `0x04`, and raise the baud rate.
 - Tune the PID in the water.
 
