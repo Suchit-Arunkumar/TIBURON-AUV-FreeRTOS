@@ -573,6 +573,38 @@ bool control_loop_get_armed(void)
     return g_armed;
 }
 
+/*
+ * The individual getters above are fine on their own, but comms_task
+ * (priority 5) calling four of them in a row can be preempted by
+ * control_task (priority 7) part-way through, and the telemetry packet
+ * then carries pose from one tick and PWM from the next. Copying
+ * everything inside one short critical section rules that out. The copy
+ * is about 80 bytes, well under a microsecond with interrupts masked.
+ */
+void control_loop_snapshot(ControlSnapshot *out)
+{
+    if (out == NULL)
+    {
+        return;
+    }
+
+    taskENTER_CRITICAL();
+
+    memcpy(out->pose, pose, sizeof(out->pose));
+    memcpy(out->u,    U,    sizeof(out->u));
+
+    for (int i = 0; i < N_THR; i++)
+    {
+        out->pwm_us[i] = (uint16_t)g_pwm_current[i];
+    }
+
+    out->sat_flags = g_sat_flags;
+    out->armed     = g_armed;
+    out->link_ok   = link_ok;
+
+    taskEXIT_CRITICAL();
+}
+
 bool control_loop_get_link(void)
 {
     return link_ok;

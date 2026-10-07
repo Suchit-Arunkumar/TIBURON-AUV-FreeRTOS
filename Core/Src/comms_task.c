@@ -178,11 +178,14 @@ void comms_task(void *argument)
             ((slot = tx_reserve()) != NULL))
         {
             TelemetryPayload telemetry;
+            ControlSnapshot  ctl;
 
             memset(&telemetry, 0, sizeof(telemetry));
+            control_loop_snapshot(&ctl);
 
-            telemetry.armed   = control_loop_get_armed();
-            telemetry.link_ok = control_loop_get_link();
+            telemetry.armed     = ctl.armed;
+            telemetry.link_ok   = ctl.link_ok;
+            telemetry.sat_flags = ctl.sat_flags;
 
             /*
              * Same split as the Pico firmware:
@@ -192,13 +195,7 @@ void comms_task(void *argument)
              * xQueuePeek, not Receive: bar30Queue is depth-1 overwrite and
              * this only reads the latest value. Stays 0 with no sensor.
              */
-            float pose_now[N_DOF];
-            float u_now[N_DOF];
-
-            control_loop_get_pose(pose_now);
-            control_loop_get_u(u_now);
-
-            telemetry.depth_m   = pose_now[2];
+            telemetry.depth_m = ctl.pose[2];
 
             float raw_depth = 0.0f;
             if ((bar30Queue != NULL) &&
@@ -206,29 +203,18 @@ void comms_task(void *argument)
             {
                 telemetry.raw_depth_m = raw_depth;
             }
-            telemetry.sat_flags = control_loop_get_sat_flags();
 
             for (int i = 0; i < N_DOF; i++)
             {
-                telemetry.pid_u[i] = u_now[i];
+                telemetry.pid_u[i] = ctl.u[i];
             }
 
             /*
              * TelemetryPayload is __packed__, so esc_pwm is not
-             * guaranteed to be 2-byte aligned and passing its address to
-             * a uint16_t* parameter is undefined behaviour on a target
-             * that faults on unaligned access. Fill an aligned local and
-             * copy the bytes in.
+             * guaranteed to be 2-byte aligned. memcpy rather than
+             * element assignment through a uint16_t pointer.
              */
-            uint16_t pwm_aligned[8];
-
-            control_loop_get_pwm(pwm_aligned, 8);
-
-            memcpy(
-                telemetry.esc_pwm,
-                pwm_aligned,
-                sizeof(pwm_aligned)
-            );
+            memcpy(telemetry.esc_pwm, ctl.pwm_us, sizeof(telemetry.esc_pwm));
 
             packet_build_telemetry(&telemetry, slot);
             tx_commit();

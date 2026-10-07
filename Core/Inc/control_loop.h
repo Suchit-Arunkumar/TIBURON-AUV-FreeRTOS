@@ -54,6 +54,23 @@ void control_loop_get_u(float out[N_DOF]);
 
 /* Allocation saturation: bit0 vertical, bit1 horizontal, bit2 yaw. */
 uint8_t control_loop_get_sat_flags(void);
+
+/*
+ * Everything telemetry reports about the controller, copied in one go.
+ * Read through control_loop_snapshot() from other tasks, so a packet never
+ * mixes values from two different control ticks.
+ */
+typedef struct
+{
+    float    pose[N_DOF];
+    float    u[N_DOF];
+    uint16_t pwm_us[N_THR];
+    uint8_t  sat_flags;
+    bool     armed;
+    bool     link_ok;
+} ControlSnapshot;
+
+void control_loop_snapshot(ControlSnapshot *out);
 bool control_loop_get_armed(void);
 bool control_loop_get_link(void);
 
