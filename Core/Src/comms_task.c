@@ -3,6 +3,9 @@
 #include "packet.h"
 #include "control_loop.h"
 #include "depth_task.h"
+#include "imu_task.h"
+#include "dvl_task.h"
+#include "dvl.h"
 #include <string.h>
 #include "bench.h"
 
@@ -45,9 +48,11 @@ uint32_t comms_cmd_valid(void)
  * at tail and starts the next one. The ISR never reads or writes the
  * ring, so the ring needs no lock.
  *
- * A frame takes 5.4 ms on the wire and comms_task queues at most a few
- * per 20 ms tick, so four slots never fill on a healthy link. If they
- * ever do, the new frame is dropped and counted.
+ * A frame takes 5.4 ms on the wire at 115200 baud. Per 20 ms tick
+ * comms_task queues telemetry + sensors, plus a DVL frame when there is a
+ * new one: at most 3 frames, 16 ms of line time, and about 60% of the
+ * link on average. Four slots cover a tick's worth with one to spare. If
+ * they ever fill, the new frame is dropped and counted.
  */
 #define TX_SLOTS  4U
 
@@ -94,6 +99,135 @@ static void tx_kick(void)
             tx_in_flight = true;
         }
     }
+}
+
+/* Milliseconds since a reading taken at t, saturated to fit a u16. */
+static uint16_t age_ms(uint32_t now, uint32_t t)
+{
+    uint32_t age = now - t;
+    return (uint16_t)((age > 0xFFFFU) ? 0xFFFFU : age);
+}
+
+static uint32_t now_ms(void)
+{
+    return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+}
+
+/*
+ * SENSORS frame (type 0x03): the newest IMU and depth samples, sent with
+ * every telemetry frame. Peek, not receive: the queues hold one sample
+ * each and logging and the display read them too.
+ */
+static void queue_sensors_frame(void)
+{
+    uint8_t *slot = tx_reserve();
+
+    if (slot == NULL)
+    {
+        return;
+    }
+
+    SensorsPayload p;
+    ImuSample      imu;
+    DepthSample    depth;
+    uint32_t       now = now_ms();
+
+    memset(&p, 0, sizeof(p));       /* reserved bytes go into the CRC too */
+    p.stamp_ms = now;
+
+    if ((imuQueue != NULL) && (xQueuePeek(imuQueue, &imu, 0) == pdPASS))
+    {
+        p.imu_age_ms   = age_ms(now, imu.timestamp_ms);
+        p.imu_source   = imu.source;
+        p.imu_accuracy = imu.accuracy;
+        p.yaw_deg      = imu.yaw_deg;
+        p.pitch_deg    = imu.pitch_deg;
+        p.roll_deg     = imu.roll_deg;
+        p.gyro_x_rad_s = imu.gyro_x_rad_s;
+        p.gyro_y_rad_s = imu.gyro_y_rad_s;
+        p.gyro_z_rad_s = imu.gyro_z_rad_s;
+        p.accel_x_m_s2 = imu.accel_x_m_s2;
+        p.accel_y_m_s2 = imu.accel_y_m_s2;
+        p.accel_z_m_s2 = imu.accel_z_m_s2;
+    }
+    else
+    {
+        p.imu_age_ms = 0xFFFFU;
+    }
+
+    if ((depthQueue != NULL) && (xQueuePeek(depthQueue, &depth, 0) == pdPASS))
+    {
+        p.depth_age_ms = age_ms(now, depth.timestamp_ms);
+        p.depth_source = depth.source;
+        p.depth_m      = depth.depth_m;
+        p.water_temp_c = depth.temperature_c;
+    }
+    else
+    {
+        p.depth_age_ms = 0xFFFFU;
+    }
+
+    packet_build(TYPE_SENSORS, &p, slot);
+    tx_commit();
+}
+
+/*
+ * DVL frame (type 0x04): only when dvl_task has published a new frame
+ * since the last one sent. The Wayfinder pings at roughly 15-20 Hz near
+ * the bottom, so this goes out less often than the 50 Hz frames.
+ */
+static void queue_dvl_frame_if_new(void)
+{
+    static uint32_t last_sent_ms = 0U;
+    static bool     sent_any     = false;
+
+    DVLData d;
+
+    if ((dvlQueue == NULL) || (xQueuePeek(dvlQueue, &d, 0) != pdPASS))
+    {
+        return;
+    }
+
+    if (sent_any && (d.timestamp_ms == last_sent_ms))
+    {
+        return;
+    }
+
+    uint8_t *slot = tx_reserve();
+
+    if (slot == NULL)
+    {
+        return;
+    }
+
+    DvlPayload p;
+    uint32_t   now = now_ms();
+
+    memset(&p, 0, sizeof(p));
+    p.stamp_ms           = now;
+    p.age_ms             = age_ms(now, d.timestamp_ms);
+    p.velocity_valid     = d.velocity_valid ? 1U : 0U;
+    p.coordinate_system  = d.coordinate_system;
+    p.vx_m_s             = d.vx_m_s;
+    p.vy_m_s             = d.vy_m_s;
+    p.vz_m_s             = d.vz_m_s;
+    p.verr_m_s           = d.verr_m_s;
+    p.mean_range_m       = d.mean_range_m;
+    p.status             = d.status;
+    p.bit                = d.bit;
+    p.speed_of_sound_m_s = d.speed_of_sound_m_s;
+    p.input_voltage_v    = d.input_voltage_v;
+
+    for (int b = 0; b < 4; b++)
+    {
+        p.range_beam_m[b] = d.range_beam_m[b];
+    }
+
+    packet_build(TYPE_DVL, &p, slot);
+    tx_commit();
+
+    last_sent_ms = d.timestamp_ms;
+    sent_any     = true;
 }
 
 /* The DMA finished the frame at tail: free its slot. */
@@ -219,6 +353,9 @@ void comms_task(void *argument)
 
             packet_build_telemetry(&telemetry, slot);
             tx_commit();
+
+            queue_sensors_frame();
+            queue_dvl_frame_if_new();
         }
 
         tx_kick();

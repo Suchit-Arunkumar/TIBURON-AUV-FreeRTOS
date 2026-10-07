@@ -4,7 +4,7 @@
 #include <string.h>
 #include "bench.h"
 
-void packet_build_telemetry(const TelemetryPayload *tp, uint8_t *out_buf){
+void packet_build(uint8_t type, const void *payload, uint8_t *out_buf){
 
 	// include headers
 	out_buf[0] = STX1;
@@ -14,9 +14,9 @@ void packet_build_telemetry(const TelemetryPayload *tp, uint8_t *out_buf){
 	out_buf[2] = PAYLOAD_LEN;
 
 	//MSG ID
-	out_buf[3] = TYPE_TELEMETRY;
+	out_buf[3] = type;
 
-	memcpy(&out_buf[4], tp, sizeof(TelemetryPayload));
+	memcpy(&out_buf[4], payload, PAYLOAD_LEN);
 
 	// CRC-16 over LEN + TYPE + PAYLOAD, sent high byte first
 	uint16_t crc = crc16_ccitt(&out_buf[2], 2 + PAYLOAD_LEN);
@@ -24,6 +24,10 @@ void packet_build_telemetry(const TelemetryPayload *tp, uint8_t *out_buf){
 	out_buf[PACKET_SIZE - 2]= (uint8_t)(crc >> 8);
 	out_buf[PACKET_SIZE - 1]= (uint8_t)(crc);
 
+}
+
+void packet_build_telemetry(const TelemetryPayload *tp, uint8_t *out_buf){
+	packet_build(TYPE_TELEMETRY, tp, out_buf);
 }
 
 uint8_t packet_parse_cmd(CommandPayload *out_cmd)
