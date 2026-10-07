@@ -1,0 +1,3 @@
+# shell scripts must keep LF endings or sh on Linux/WSL rejects them
+*.sh text eol=lf
+*.py text eol=lf
