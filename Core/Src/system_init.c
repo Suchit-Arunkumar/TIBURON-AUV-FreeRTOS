@@ -1,17 +1,9 @@
 #include "system_init.h"
 
-/*
- * Composed register values.
- *
- * Both registers are written with '=', not '|='. PLLCFGR resets to
- * 0x24003010 (PLLM=16, PLLN=192, PLLQ=4, PLLR=2) and the CFGR prescaler
- * fields are live on a warm reset, so OR-ing onto them produces a
- * silently wrong clock rather than a compile error. That was defect B1
- * and B2 in the Phase A audit.
- */
+// 180 MHz clock setup. Both registers are written whole ('=', not '|='):
+// PLLCFGR doesn't reset to zero, so OR-ing onto it gives a wrong clock.
 
-/* PLLM=8, PLLN=360, PLLP=2(00), PLLSRC=HSE, PLLQ=7, PLLR=2.
- * PLLR must stay in 2..7 even though it is unused here — 0 is reserved. */
+// 8 MHz / 8 x 360 / 2 = 180 MHz. PLLR unused but must be 2..7.
 #define PLLCFGR_HSE_180MHZ                       \
     ( (8UL   << RCC_PLLCFGR_PLLM_Pos)   |        \
       (360UL << RCC_PLLCFGR_PLLN_Pos)   |        \
@@ -20,10 +12,9 @@
       (7UL   << RCC_PLLCFGR_PLLQ_Pos)   |        \
       (2UL   << RCC_PLLCFGR_PLLR_Pos) )
 
-/* Same VCO, driven from the 16 MHz HSI: M=16 keeps VCO-in at 1 MHz, so
- * N/P/Q are unchanged and SYSCLK is still 180 MHz. That is what makes
- * the HSE fallback worth having — every BRR/CCR/PSC in the drivers
- * stays valid, and only the accuracy degrades. */
+// Fallback without HSE: 16 MHz HSI / 16, same multipliers, still
+// 180 MHz, so every baud rate and timer setting stays valid (just less
+// accurate).
 #define PLLCFGR_HSI_180MHZ                       \
     ( (16UL  << RCC_PLLCFGR_PLLM_Pos)   |        \
       (360UL << RCC_PLLCFGR_PLLN_Pos)   |        \
@@ -32,28 +23,19 @@
       (7UL   << RCC_PLLCFGR_PLLQ_Pos)   |        \
       (2UL   << RCC_PLLCFGR_PLLR_Pos) )
 
-/* HPRE=DIV1, PPRE1=DIV4, PPRE2=DIV2, SW left at 0 (HSI) for now. */
+// AHB 180 MHz, APB1 45 MHz, APB2 90 MHz
 #define CFGR_PRESCALERS                          \
     ( RCC_CFGR_HPRE_DIV1  |                      \
       RCC_CFGR_PPRE1_DIV4 |                      \
       RCC_CFGR_PPRE2_DIV2 )
 
-/*
- * Bounded-wait budget.
- *
- * Every spin below runs before the PLL is switched in, i.e. on the
- * 16 MHz HSI. The loop body is a load, a test and a branch, so roughly
- * 4 cycles; 0x00080000 iterations is about 130 ms. HSE bypass off the
- * ST-LINK MCO settles in well under 1 ms and PLL lock takes ~200 us, so
- * this is three orders of magnitude of margin. It exists to make a dead
- * input diagnosable, not to race a slow one.
- */
+// Every wait is bounded (~130 ms at 16 MHz), so a dead clock source gives
+// an error code instead of a hang. The real waits take under 1 ms.
 #define CLOCK_WAIT_ITERATIONS   0x00080000UL
 
 volatile ClockStatus g_clock_status = CLOCK_FAULT_PLL_TIMEOUT;
 
-/* Returns 1 if the masked bits in *reg reached the wanted state before
- * the budget expired, 0 on timeout. */
+// 1 if the bits reached the wanted state in time, 0 on timeout.
 static uint32_t wait_for_bits(volatile uint32_t *reg,
                               uint32_t mask,
                               uint32_t want_set)
@@ -71,15 +53,8 @@ static uint32_t wait_for_bits(volatile uint32_t *reg,
     return 0UL;
 }
 
-/*
- * Steps 4-6 of the 180 MHz sequence: over-drive on, over-drive switch,
- * then flash latency. Split out only because the HSE and HSI paths need
- * it verbatim.
- *
- * Skipping this leaves the core at 180 MHz on a regulator provisioned
- * for less, reading flash with too few wait states. The failure is not
- * graceful.
- */
+// Above 168 MHz the regulator needs over-drive, and flash needs 5 wait
+// states. Both paths (HSE and HSI) use this.
 static uint32_t enable_overdrive_and_flash(void)
 {
     /* 4. Over-drive enable. */
@@ -98,17 +73,13 @@ static uint32_t enable_overdrive_and_flash(void)
         return 0UL;
     }
 
-    /*
-     * 6. Flash: 5 wait states for 180 MHz at 2.7-3.6 V, plus prefetch
-     *    and both caches. Composed write — LATENCY is a 4-bit field and
-     *    OR-ing onto it cannot lower a stale value.
-     */
+    // 5 wait states for 180 MHz at 3.3 V, prefetch, caches
     FLASH->ACR = FLASH_ACR_LATENCY_5WS |
                  FLASH_ACR_PRFTEN      |
                  FLASH_ACR_ICEN        |
                  FLASH_ACR_DCEN;
 
-    /* Readback: the latency field must actually have taken. */
+    // check it actually took
     if ((FLASH->ACR & FLASH_ACR_LATENCY) != FLASH_ACR_LATENCY_5WS)
     {
         return 0UL;
@@ -117,9 +88,7 @@ static uint32_t enable_overdrive_and_flash(void)
     return 1UL;
 }
 
-/* Last resort: leave the chip on the raw 16 MHz HSI so it can boot far
- * enough to say why. Prescalers go to DIV1 and flash to 0 WS, because
- * nothing downstream is valid at this point anyway. */
+// Last resort: back to the raw 16 MHz HSI, just enough to blink an error.
 static void fall_back_to_raw_hsi(void)
 {
     RCC->CR |= RCC_CR_HSION;
@@ -139,26 +108,15 @@ ClockStatus system_clock_init(void)
 {
     ClockStatus status = CLOCK_OK_HSE;
 
-    /*
-     * 1. Power interface clock. The PWR registers touched below are
-     *    unwritable until this is on.
-     */
+    // PWR registers can't be written until its clock is on
     RCC->APB1ENR |= RCC_APB1ENR_PWREN;
     (void)RCC->APB1ENR;   /* force the write to land before PWR is touched */
 
-    /*
-     * 2. Regulator voltage Scale 1. Required for any SYSCLK above
-     *    168 MHz, and a precondition for the over-drive handshake.
-     */
+    // regulator scale 1, needed above 168 MHz and for over-drive
     PWR->CR = (PWR->CR & ~PWR_CR_VOS) | PWR_CR_VOS;   /* VOS = 0b11 */
 
-    /*
-     * 3a. HSE in bypass. The Nucleo-F446RE has no crystal fitted; the
-     *     8 MHz arrives as a digital clock from the ST-LINK MCO, so
-     *     HSEBYP must be set. HSEBYP is only writable while HSEON is
-     *     clear, hence the explicit clear first — this matters on a warm
-     *     reset where HSE may already be running.
-     */
+    // HSE bypass: the Nucleo has no crystal, the ST-LINK supplies 8 MHz.
+    // HSEBYP can only change with HSE off, so turn it off first.
     RCC->CR &= ~(RCC_CR_HSEON | RCC_CR_HSEBYP);
     (void)wait_for_bits(&RCC->CR, RCC_CR_HSERDY, 0UL);
 
@@ -167,10 +125,7 @@ ClockStatus system_clock_init(void)
 
     uint32_t hse_ok = wait_for_bits(&RCC->CR, RCC_CR_HSERDY, 1UL);
 
-    /*
-     * 3b. PLL. PLLCFGR is write-protected while PLLON is set, so the
-     *     PLL is stopped before it is reconfigured.
-     */
+    // PLLCFGR can't be written while the PLL runs
     RCC->CR &= ~RCC_CR_PLLON;
     (void)wait_for_bits(&RCC->CR, RCC_CR_PLLRDY, 0UL);
 
@@ -180,7 +135,7 @@ ClockStatus system_clock_init(void)
     }
     else
     {
-        /* Keep 180 MHz, lose crystal accuracy. See the enum comment. */
+        /* no HSE: run the PLL from the HSI instead */
         status = CLOCK_DEGRADED_HSI_PLL;
         RCC->CR &= ~RCC_CR_HSEON;
         RCC->PLLCFGR = PLLCFGR_HSI_180MHZ;
@@ -195,7 +150,7 @@ ClockStatus system_clock_init(void)
         return g_clock_status;
     }
 
-    /* 4, 5, 6. Over-drive then flash latency — before any clock rises. */
+    /* over-drive and flash wait states before the clock goes up */
     if (!enable_overdrive_and_flash())
     {
         fall_back_to_raw_hsi();
@@ -203,33 +158,17 @@ ClockStatus system_clock_init(void)
         return g_clock_status;
     }
 
-    /*
-     * 7. Bus prescalers, in a single write, while SYSCLK is still the
-     *    16 MHz HSI. Setting these before the switch means APB1 and APB2
-     *    are never momentarily overclocked.
-     */
+    // bus dividers first, so APB1/APB2 are never briefly overclocked
     RCC->CFGR = CFGR_PRESCALERS;
 
-    /*
-     * 8. Switch SYSCLK to the PLL.
-     */
+    // switch SYSCLK to the PLL
     RCC->CFGR = CFGR_PRESCALERS | RCC_CFGR_SW_PLL;
 
     for (uint32_t i = 0; i < CLOCK_WAIT_ITERATIONS; i++)
     {
         if ((RCC->CFGR & RCC_CFGR_SWS) == RCC_CFGR_SWS_PLL)
         {
-            /*
-             * Set the CMSIS variable from ground truth rather than asking
-             * SystemCoreClockUpdate() to re-derive it from HSE_VALUE and
-             * PLLCFGR. Both PLL configurations above are built to land on
-             * exactly SYSCLK_HZ, so this is the authoritative value and
-             * the derivation is just another chance to be wrong.
-             *
-             * FreeRTOS does not read this - configCPU_CLOCK_HZ is a
-             * literal - but anything else that consults SystemCoreClock
-             * now gets the right answer.
-             */
+            // both PLL settings give exactly SYSCLK_HZ
             SystemCoreClock = SYSCLK_HZ;
 
             g_clock_status = status;
@@ -243,22 +182,9 @@ ClockStatus system_clock_init(void)
 }
 
 /*
- * LD2 fault blink - the only diagnostic that survives a broken clock.
- *
- * On any fatal clock status the core is on the raw 16 MHz HSI. Every UART
- * divisor in the tree assumes a 45 MHz APB1, so USART2 would run at
- * 16e6/391 = 40.9 kBaud against a host expecting 115200 and the console
- * would be unreadable garbage. The LED is all that is left.
- *
- * Pattern: the status code as a count of short pulses, then a long gap,
- * forever. Count the blinks to identify the fault without a debugger:
- *
- *   2 blinks -> CLOCK_FAULT_PLL_TIMEOUT
- *   3 blinks -> CLOCK_FAULT_OVERDRIVE_TIMEOUT
- *   4 blinks -> CLOCK_FAULT_SWITCH_TIMEOUT
- *
- * Timing is cycle-counted against 16 MHz, not tick-based - there is no
- * scheduler and SysTick is not running.
+ * With the clock broken the console baud rate is wrong, so the LED is the
+ * only way to report it: 2 blinks = PLL never locked, 3 = over-drive
+ * failed, 4 = clock switch failed. Timed by counting cycles at 16 MHz.
  */
 
 #define HSI_FALLBACK_HZ         16000000UL
@@ -307,13 +233,7 @@ void clock_fault_blink_forever(ClockStatus s)
 
 int clock_status_is_fatal(ClockStatus s)
 {
-    /*
-     * OK and DEGRADED both leave the core at 180 MHz, so every derived
-     * BRR, CCR and PSC stays valid and the scheduler may start. Every
-     * other status means the board fell back to the raw 16 MHz HSI, where
-     * the UART baud divisors are off by 11.25x and nothing downstream is
-     * trustworthy - including the console that would have reported it.
-     */
+    // OK and DEGRADED both run at 180 MHz; anything else is on 16 MHz
     return (s != CLOCK_OK_HSE) && (s != CLOCK_DEGRADED_HSI_PLL);
 }
 
