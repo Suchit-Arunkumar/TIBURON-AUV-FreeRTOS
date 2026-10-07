@@ -10,7 +10,7 @@
 
 /*
  * Records are packed into 512-byte blocks and written when a block is full
- * (every ~2.4 s) or on a flush. One block per record would program 12.8x
+ * (7 records, every ~1.4 s) or on a flush. One block per record would program 7x
  * more flash and hit the card's 250 ms worst-case busy time 5 times a
  * second. Block layout: sd_logger.h.
  */

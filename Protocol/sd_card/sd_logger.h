@@ -43,6 +43,19 @@ typedef struct __attribute__((packed))
     uint8_t armed;           // 0 = disarmed, 1 = armed
     uint8_t link_ok;         // 0 = link lost, 1 = link healthy
 
+    // The board's own sensors (0 / source 0 when missing or stale)
+    uint8_t imu_source;      // SensorSource: 1 VN-200, 2 BNO085
+    uint8_t depth_source;    // 3 Bar30, 4 analog
+    uint8_t dvl_valid;       // 1 = bottom lock
+    uint8_t reserved;
+
+    float imu_yaw_deg;
+    float imu_pitch_deg;
+    float imu_roll_deg;
+    float sensor_depth_m;
+    float dvl_vx_m_s;
+    float dvl_vy_m_s;
+
     uint16_t crc16;          // CRC-16-CCITT over the fields above
 
 } LogRecord;
