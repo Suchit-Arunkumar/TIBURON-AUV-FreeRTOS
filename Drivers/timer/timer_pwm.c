@@ -197,3 +197,22 @@ void pwm_all_neutral(void)
         pwm_set_us(i, (uint16_t)PWM_US_NEUTRAL);
     }
 }
+
+void pwm_fault_neutral(void)
+{
+    /*
+     * Deliberately no update event (EGR = UG) to apply this immediately.
+     * Restarting the counter in the middle of a high pulse stretches that
+     * pulse, which the ESC would read as a command for one frame. With
+     * preload on, the neutral value takes over cleanly at the next frame.
+     */
+    TIM3->CCR1 = PWM_US_NEUTRAL;
+    TIM3->CCR2 = PWM_US_NEUTRAL;
+    TIM3->CCR3 = PWM_US_NEUTRAL;
+    TIM3->CCR4 = PWM_US_NEUTRAL;
+
+    TIM8->CCR1 = PWM_US_NEUTRAL;
+    TIM8->CCR2 = PWM_US_NEUTRAL;
+    TIM8->CCR3 = PWM_US_NEUTRAL;
+    TIM8->CCR4 = PWM_US_NEUTRAL;
+}

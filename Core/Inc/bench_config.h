@@ -4,7 +4,11 @@
 /*
  * BENCH_HIL - hardware-in-the-loop instrumentation for a bare Nucleo.
  *
- * 1 (default): the build carries the bench layer in Core/Src/bench.c:
+ * Set by the build configuration: 1 in Debug, 0 in Release. A Release
+ * build is the one for the vehicle and never contains these hooks.
+ * -DBENCH_HIL=0 or =1 on the command line overrides either.
+ *
+ * 1: the build carries the bench layer in Core/Src/bench.c:
  *   DWT cycle timing of the TIM7 -> control_task path, per-task CPU load,
  *   MSP high-water mark, a USART1 loopback injector (PA9 jumpered to PA10),
  *   PWM measured by the chip itself (TIM2_CH1 input capture on PA15), an
@@ -17,10 +21,14 @@
  *   or stop the control task (W). A BENCH_HIL build must never be flashed
  *   to a vehicle with ESCs and props attached; the boot banner says so.
  *
- * 0: none of it is compiled. Use -DBENCH_HIL=0 for the vehicle.
+ * 0: none of it is compiled.
  */
 #ifndef BENCH_HIL
+#ifdef DEBUG
 #define BENCH_HIL 1
+#else
+#define BENCH_HIL 0
+#endif
 #endif
 
 #endif /* BENCH_CONFIG_H */

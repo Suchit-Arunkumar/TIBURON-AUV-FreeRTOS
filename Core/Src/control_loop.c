@@ -231,11 +231,35 @@ void control_loop_init(void)
     last_cmd_tick = 0;
 }
 
+/*
+ * Forget everything the controller has accumulated and re-engage the
+ * slew limiter. Used on every armed -> disarmed transition, whether the
+ * Pi disarmed the vehicle or the failsafe did.
+ *
+ * Before this existed only the failsafe path did it. A disarm from the Pi
+ * left g_ramping false and the integrator and last error intact, so the
+ * next arm stepped the thrusters straight to the commanded value with a
+ * stale integral and a derivative kick.
+ */
+static void reset_controller(void)
+{
+    for (int i = 0; i < N_DOF; i++)
+        errInt[i] = errPrev[i] = errState[i] = U[i] = 0.0f;
+
+    g_ramping = true;
+}
+
 void control_loop_tick(void)
 {
     const float dt = 0.02f;
+    static bool was_armed = false;
 
     checkCommandTimeout();
+
+    if (was_armed && !g_armed) {
+        reset_controller();
+    }
+    was_armed = g_armed;
 
     if (g_armed) {
         computePID(dt);
@@ -425,8 +449,8 @@ void applyPWM(void)
     /*
      * The ramp is complete once a whole pass needed no clamping - every
      * thruster has caught up with its commanded value. Only meaningful
-     * while armed; a disarmed vehicle sits at neutral and stays ramping,
-     * which is what we want for the next arming.
+     * while armed; disarming sets g_ramping again (reset_controller), so
+     * the next arming always ramps.
      */
     if (g_ramping && g_armed && !clamped_any) {
         g_ramping = false;
@@ -446,10 +470,7 @@ void enterFailsafe(void)
 
     /* Outputs are about to be forced to neutral, so the next arming must
      * walk them back up rather than step. */
-    g_ramping = true;
-
-    for (int i = 0; i < N_DOF; i++)
-        errInt[i] = errPrev[i] = errState[i] = U[i] = 0.0f;
+    reset_controller();
 
     /*
      * Discard the setpoint as well as the integrator state.
@@ -552,6 +573,38 @@ bool control_loop_get_armed(void)
     return g_armed;
 }
 
+/*
+ * The individual getters above are fine on their own, but comms_task
+ * (priority 5) calling four of them in a row can be preempted by
+ * control_task (priority 7) part-way through, and the telemetry packet
+ * then carries pose from one tick and PWM from the next. Copying
+ * everything inside one short critical section rules that out. The copy
+ * is about 80 bytes, well under a microsecond with interrupts masked.
+ */
+void control_loop_snapshot(ControlSnapshot *out)
+{
+    if (out == NULL)
+    {
+        return;
+    }
+
+    taskENTER_CRITICAL();
+
+    memcpy(out->pose, pose, sizeof(out->pose));
+    memcpy(out->u,    U,    sizeof(out->u));
+
+    for (int i = 0; i < N_THR; i++)
+    {
+        out->pwm_us[i] = (uint16_t)g_pwm_current[i];
+    }
+
+    out->sat_flags = g_sat_flags;
+    out->armed     = g_armed;
+    out->link_ok   = link_ok;
+
+    taskEXIT_CRITICAL();
+}
+
 bool control_loop_get_link(void)
 {
     return link_ok;
@@ -610,7 +663,14 @@ void control_task(void *argument)
 
 	    CommandPayload cmd;
 
-	    if (xQueueReceive(commandQueue, &cmd, 0) == pdPASS)
+	    /*
+	     * Drain the queue, oldest first, so the setpoint this tick acts on
+	     * is the newest one. Taking one per tick meant that a Pi sending
+	     * faster than 50 Hz filled the queue and the vehicle ran up to four
+	     * commands (80 ms) behind. Every packet still goes through
+	     * target_update, so each one counts towards failsafe recovery.
+	     */
+	    while (xQueueReceive(commandQueue, &cmd, 0) == pdPASS)
 	    {
 	        float new_pose[6] = {
 	            cmd.current_x,
@@ -645,14 +705,14 @@ void control_task(void *argument)
 	     * ESCs lose their signal — which is what we want — rather than
 	     * staying alive with the last PWM values latched.
 	     *
-	     * Compiles to nothing unless ENABLE_IWDG is defined in iwdg.h.
+	     * Compiles to nothing in Debug builds (see iwdg.h).
 	     */
 	    iwdg_kick();
 
 	    /* Tell Comms Task that a telemetry update is ready */
 	    xTaskNotify(
 	        commsTaskHandle,
-	        (1UL << 1),
+	        COMMS_NOTIFY_TELEMETRY,
 	        eSetBits
 	    );
 

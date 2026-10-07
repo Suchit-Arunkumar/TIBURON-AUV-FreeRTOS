@@ -727,7 +727,7 @@ def test_iwdg(c: Console, ctx: Ctx, runs: int) -> Result:
     r = Result("Watchdog resets a hung control loop",
                "only control_task refreshes the IWDG: hang it and the board resets inside the LSI-derived window")
     if not ctx.iwdg:
-        return r.skip("IWDG disabled in this build (uncomment ENABLE_IWDG in iwdg.h to run it)")
+        return r.skip("IWDG disabled in this build (add -DENABLE_IWDG to the Debug defines to run it)")
     lo = 1000 * IWDG_COUNTS / LSI_MAX
     hi = 1000 * IWDG_COUNTS / LSI_MIN
     times = []

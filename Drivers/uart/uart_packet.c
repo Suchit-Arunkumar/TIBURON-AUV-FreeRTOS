@@ -99,7 +99,24 @@ void uart1_init(void)
 	    DMA2_Stream2->CR |= DMA_SxCR_EN;
 
 
-	 // 14. enable USART1 interrupt in NVIC
+	// 14. TX DMA: DMA2 Stream7 channel 4 (USART1_TX), memory to peripheral.
+	//     Only the fixed parts are set here; uart1_tx_dma_start() fills in
+	//     the address and length for each frame.
+	    USART1->CR3 |= USART_CR3_DMAT;
+
+	    DMA2_Stream7->CR &= ~DMA_SxCR_EN;
+	    while (DMA2_Stream7->CR & DMA_SxCR_EN);
+
+	    DMA2_Stream7->PAR = (uint32_t)&USART1->DR;
+	    DMA2_Stream7->CR  = (4U << DMA_SxCR_CHSEL_Pos)   // channel 4
+	                      | DMA_SxCR_DIR_0               // memory -> peripheral
+	                      | DMA_SxCR_MINC
+	                      | DMA_SxCR_TCIE                // frame finished
+	                      | DMA_SxCR_TEIE;               // transfer error
+
+	    NVIC_SetPriority(DMA2_Stream7_IRQn, 6);
+
+	 // 15. enable USART1 interrupt in NVIC
 	 NVIC_SetPriority(USART1_IRQn, 5);
 
 	 // Same priority as USART1 on purpose: the two handlers share
@@ -169,7 +186,7 @@ static void uart1_dma_drain(bool from_dma_event)
 
         xTaskNotifyFromISR(
             commsTaskHandle,
-            (1UL << 0),
+            COMMS_NOTIFY_RX,
             eSetBits,
             &xHigherPriorityTaskWasWoken
         );
@@ -215,8 +232,76 @@ void DMA2_Stream2_IRQHandler(void)
 }
 
 
+/*
+ * Start sending len bytes from buf with DMA and return immediately.
+ *
+ * Before this, comms_task wrote every byte itself and spun on TXE in
+ * between: a 62-byte frame at 115200 baud is 5.4 ms, and the bench run
+ * measured comms_task at 27% CPU just waiting (54% with a second frame
+ * per tick). Now the CPU writes nothing; DMA2 Stream7 feeds the UART and
+ * DMA2_Stream7_IRQHandler tells comms_task when the frame is gone.
+ *
+ * Returns false if a frame is still being sent. buf must stay untouched
+ * until COMMS_NOTIFY_TX_DONE arrives.
+ *
+ * UNTESTED on hardware: re-run the hil_rtos.py loopback and CPU-load
+ * tests to confirm frames still arrive and comms_task CPU drops.
+ */
+bool uart1_tx_dma_start(const uint8_t *buf, uint16_t len)
+{
+    if (DMA2_Stream7->CR & DMA_SxCR_EN)
+    {
+        return false;
+    }
+
+    // stale flags from the previous transfer would stop the stream
+    // starting, so clear all of Stream7's flags first
+    DMA2->HIFCR = DMA_HIFCR_CTCIF7 | DMA_HIFCR_CHTIF7 | DMA_HIFCR_CTEIF7
+                | DMA_HIFCR_CDMEIF7 | DMA_HIFCR_CFEIF7;
+
+    DMA2_Stream7->M0AR = (uint32_t)buf;
+    DMA2_Stream7->NDTR = len;
+    DMA2_Stream7->CR  |= DMA_SxCR_EN;
+
+    return true;
+}
+
+void DMA2_Stream7_IRQHandler(void)
+{
+    uint32_t done = DMA2->HISR & (DMA_HISR_TCIF7 | DMA_HISR_TEIF7);
+
+    if (done == 0U)
+    {
+        return;
+    }
+
+    DMA2->HIFCR = DMA_HIFCR_CTCIF7 | DMA_HIFCR_CTEIF7;
+
+    /*
+     * A transfer error is reported the same way as completion: either way
+     * the stream has stopped and the buffer is free. The frame is lost,
+     * which the Pi sees as a missing telemetry packet, nothing worse.
+     */
+    if (commsTaskHandle != NULL)
+    {
+        BaseType_t woken = pdFALSE;
+
+        xTaskNotifyFromISR(commsTaskHandle, COMMS_NOTIFY_TX_DONE, eSetBits, &woken);
+        portYIELD_FROM_ISR(woken);
+    }
+}
+
+/*
+ * Blocking write. Only the bench injector uses this now; it first waits
+ * for any DMA frame still going out, so the two never interleave on the
+ * wire.
+ */
 void uart1_write_buf(uint8_t *buf, uint16_t len)
 {
+    while (DMA2_Stream7->CR & DMA_SxCR_EN)
+    {
+    }
+
     for(uint16_t i = 0; i < len; i++)
     {
         while(!(USART1->SR & USART_SR_TXE))
@@ -259,4 +344,5 @@ void uart1_irq_enable(void)
 {
     NVIC_EnableIRQ(USART1_IRQn);
     NVIC_EnableIRQ(DMA2_Stream2_IRQn);
+    NVIC_EnableIRQ(DMA2_Stream7_IRQn);
 }

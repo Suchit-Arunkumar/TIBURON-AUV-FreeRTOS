@@ -5,10 +5,14 @@
 #include <stdint.h>
 
 /* ======================================================================
- * ENABLE_IWDG - the one line to toggle.
+ * ENABLE_IWDG - set by the build configuration.
  *
- * Commented out by default so bench work, breakpoints and single-stepping
- * do not reset the board. Uncomment for anything that goes in the water.
+ *   Release (no DEBUG symbol): always on. This is the build for the
+ *                              vehicle, and it cannot be built without
+ *                              a watchdog by accident.
+ *   Debug:                     off, so breakpoints and single-stepping do
+ *                              not reset the board. Add -DENABLE_IWDG to
+ *                              the Debug defines to test the watchdog.
  *
  * When enabled, ONLY control_task refreshes the watchdog. That is
  * deliberate: if the control loop stops running, the board resets and the
@@ -16,7 +20,9 @@
  * values latched into the ESCs. A watchdog kicked from a low-priority
  * task or a timer would defeat that entirely.
  * ====================================================================== */
-/* #define ENABLE_IWDG */
+#if !defined(DEBUG) && !defined(ENABLE_IWDG)
+#define ENABLE_IWDG
+#endif
 
 /*
  * ~1 s timeout. LSI is nominally 32 kHz; PR=4 divides by 64, giving a
