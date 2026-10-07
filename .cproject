@@ -65,6 +65,7 @@
 									<listOptionValue builtIn="false" value="../Drivers/iwdg"/>
 									<listOptionValue builtIn="false" value="&quot;${ProjDirPath}/Devices/vn200&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${ProjDirPath}/Devices/dvl&quot;"/>
+									<listOptionValue builtIn="false" value="../Middlewares/Third_Party/sh2"/>
 								</option>
 								<inputType id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c.1433887861" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c"/>
 							</tool>
@@ -116,6 +117,7 @@
 								<listOptionValue builtIn="false" value="../Drivers/iwdg"/>
 								<listOptionValue builtIn="false" value="&quot;${ProjDirPath}/Devices/vn200&quot;"/>
 								<listOptionValue builtIn="false" value="&quot;${ProjDirPath}/Devices/dvl&quot;"/>
+								<listOptionValue builtIn="false" value="../Middlewares/Third_Party/sh2"/>
 							</option>
 							<inputType id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c.1671339068" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c"/>
 						</tool>
@@ -136,6 +138,7 @@
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Middlewares/FreeRTOS/Source"/>
 						<entry excluding="sd_card" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Protocol"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Protocol/sd_card"/>
+						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Middlewares/Third_Party/sh2"/>
 					</sourceEntries>
 				</configuration>
 			</storageModule>
@@ -202,6 +205,7 @@
 									<listOptionValue builtIn="false" value="../Drivers/iwdg"/>
 									<listOptionValue builtIn="false" value="&quot;${ProjDirPath}/Devices/vn200&quot;"/>
 									<listOptionValue builtIn="false" value="&quot;${ProjDirPath}/Devices/dvl&quot;"/>
+									<listOptionValue builtIn="false" value="../Middlewares/Third_Party/sh2"/>
 								</option>
 								<inputType id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c.614582256" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c"/>
 							</tool>
@@ -237,6 +241,7 @@
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Middlewares/FreeRTOS/Source"/>
 						<entry excluding="sd_card" flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Protocol"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Protocol/sd_card"/>
+						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Middlewares/Third_Party/sh2"/>
 					</sourceEntries>
 				</configuration>
 			</storageModule>
