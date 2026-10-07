@@ -1,11 +1,32 @@
-// sd_logger.h
-
 #ifndef SD_LOGGER_H
 #define SD_LOGGER_H
 
 #include <stdint.h>
 #include "sd_card.h"
 
+/*
+ * Log layout on the card: raw 512-byte blocks from SD_LOG_FIRST_BLOCK on,
+ * no filesystem. Each block is a 16-byte header plus as many whole records
+ * as fit. A new run starts after the last block of the previous one, with
+ * seq starting again at 0, so runs can be told apart offline.
+ */
+
+/* Blocks below this are left alone (partition table, boot sector). */
+#define SD_LOG_FIRST_BLOCK   100UL
+
+/* How far the start-up search looks: 2^22 blocks = 2 GB. */
+#define SD_LOG_MAX_BLOCKS    (1UL << 22)
+
+#define LOG_BLOCK_MAGIC      0x54424C31UL   /* "TBL1" */
+
+typedef struct __attribute__((packed))
+{
+    uint32_t magic;
+    uint32_t seq;              /* block number within this run, from 0 */
+    uint16_t record_count;     /* valid records in this block          */
+    uint16_t record_size;      /* sizeof(LogRecord), for offline parse */
+    uint32_t first_timestamp;  /* tick of the first record             */
+} LogBlockHeader;
 
 typedef struct __attribute__((packed))
 {
@@ -26,20 +47,21 @@ typedef struct __attribute__((packed))
 
 } LogRecord;
 
-/*
- * First block used for log data. Blocks below this are left alone so a
- * partition table or boot sector, if the card has one, is not stomped.
- */
-#define SD_LOG_FIRST_BLOCK   100UL
-
-// Reset the block cursor.
-void sd_logger_init(void);
+#define LOG_RECORDS_PER_BLOCK \
+    ((512U - sizeof(LogBlockHeader)) / sizeof(LogRecord))
 
 /*
- * Block address for a given block sequence number. logging_task assembles
- * whole 512-byte blocks itself, so the logger's job is now just the
- * address mapping - the per-record write path is gone.
+ * Find where this run should start writing: the first block after
+ * SD_LOG_FIRST_BLOCK that doesn't hold a log block. Binary search, so
+ * about 22 block reads. Assumes earlier runs were written as one unbroken
+ * run of blocks (true unless a write failed). Call once, after sd_init()
+ * and before the scheduler starts.
  */
+uint32_t sd_logger_find_start(void);
+
+/* Set the block that seq 0 of this run goes to. */
+void sd_logger_init(uint32_t start_block);
+
 uint32_t sd_logger_block_for_seq(uint32_t seq);
 
 #endif

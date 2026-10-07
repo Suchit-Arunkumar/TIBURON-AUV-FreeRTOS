@@ -424,6 +424,15 @@ int main(void)
 
     printf("SD: %s\r\n", sd_status_str(sd_status));
 
+    if (sd_status == SD_OK)
+    {
+        // continue after the previous run's log instead of overwriting it
+        uint32_t log_start = sd_logger_find_start();
+        sd_logger_init(log_start);
+        printf("SD: %s, log starts at block %lu\r\n",
+               sd_is_sdhc() ? "SDHC" : "SDSC", (unsigned long)log_start);
+    }
+
     i2c1_init();
     int i2c_lock_ok = i2c1_lock_create();
 
