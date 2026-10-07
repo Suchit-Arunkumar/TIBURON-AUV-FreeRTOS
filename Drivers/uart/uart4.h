@@ -21,4 +21,7 @@ uint16_t uart4_read(
  * iteration, never from main - see the note in the .c file. */
 void uart4_irq_enable(void);
 
+/* Bytes dropped because the RX ring was full. */
+uint32_t uart4_rx_dropped(void);
+
 #endif

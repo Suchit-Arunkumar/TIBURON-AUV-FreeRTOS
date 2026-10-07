@@ -78,49 +78,45 @@ void dvl_task(void *argument)
 
 
         /*
-         * Drain all bytes currently stored in the
-         * UART4 software ring buffer.
+         * Drain everything UART4 has buffered, 128 bytes at a time, and
+         * feed every byte to the DVL parser. Reading only one chunk per
+         * wake-up left the rest waiting for the next interrupt.
          */
-        uint16_t received =
-            uart4_read(
-                rx_data,
-                sizeof(rx_data)
-            );
+        uint16_t received;
 
-
-        /*
-         * Feed every byte into the DVL parser.
-         */
-        for (uint16_t i = 0U; i < received; i++)
+        while ((received = uart4_read(rx_data, sizeof(rx_data))) > 0U)
         {
-            if (dvl_feed_byte(rx_data[i]))
+            for (uint16_t i = 0U; i < received; i++)
             {
-                DVLData data;
-
-                if (dvl_get_data(&data))
+                if (dvl_feed_byte(rx_data[i]))
                 {
-                    if (g_dvl_state != SENSOR_OK)
-                    {
-                        g_dvl_state = SENSOR_OK;
+                    DVLData data;
 
-                        if (announced == 0U)
+                    if (dvl_get_data(&data))
+                    {
+                        if (g_dvl_state != SENSOR_OK)
                         {
-                            announced = 1U;
-                            console_printf("DVL: ok");
-                        }
-                    }
+                            g_dvl_state = SENSOR_OK;
 
-                    /*
-                     * Queue length = 1.
-                     *
-                     * Keep newest measurement.
-                     */
-                    if (dvlQueue != NULL)
-                    {
-                        xQueueOverwrite(
-                            dvlQueue,
-                            &data
-                        );
+                            if (announced == 0U)
+                            {
+                                announced = 1U;
+                                console_printf("DVL: ok");
+                            }
+                        }
+
+                        /*
+                         * Queue length = 1.
+                         *
+                         * Keep newest measurement.
+                         */
+                        if (dvlQueue != NULL)
+                        {
+                            xQueueOverwrite(
+                                dvlQueue,
+                                &data
+                            );
+                        }
                     }
                 }
             }

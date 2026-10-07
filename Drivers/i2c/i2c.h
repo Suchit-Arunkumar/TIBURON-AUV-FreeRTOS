@@ -31,13 +31,29 @@ typedef enum
 
 const char *i2c_status_str(I2C_Status s);
 
+/*
+ * Create the bus mutex. Call once from main before the scheduler starts;
+ * returns 0 if the heap is exhausted. Every function below takes the
+ * mutex for the length of one transfer once the scheduler is running.
+ */
+int        i2c1_lock_create(void);
+
+/* 400 kHz fast mode. Every device on I2C1 supports it: the Bar30
+ * (MS5837 datasheet, SCL max 400 kHz), the BNO085 and the bench MPU-6050. */
 void       i2c1_init(void);
-I2C_Status i2c_write(uint8_t addr, uint8_t *data, uint8_t len);
-I2C_Status i2c_read(uint8_t addr, uint8_t *buf, uint8_t len);
-/* Master receive using RM0390's per-length sequences (N = 1, N = 2 with POS,
- * N > 2 with BTF on the last three bytes). Immune to the task being
- * preempted mid-transfer; i2c_read() is not. See i2c.c. */
-I2C_Status i2c_read_rm(uint8_t addr, uint8_t *buf, uint8_t len);
+
+/* Lengths are 16-bit: a BNO085 SHTP packet can be a few hundred bytes. */
+I2C_Status i2c_write(uint8_t addr, const uint8_t *data, uint16_t len);
+
+/* Master receive using RM0390's per-length sequences (N = 1, N = 2 with
+ * POS, N > 2 with BTF on the last three bytes). Safe if the task is
+ * preempted mid-transfer. Use this one. */
+I2C_Status i2c_read(uint8_t addr, uint8_t *buf, uint16_t len);
+
+/* The original receive routine. It can ACK one byte too many if the task
+ * is preempted at the wrong moment, and the extra byte then corrupts the
+ * next read. Kept only so the bench test can show the difference. */
+I2C_Status i2c_read_legacy(uint8_t addr, uint8_t *buf, uint16_t len);
 
 /*
  * Recover a bus left stuck by a device mid-transfer. Clears BUSY by

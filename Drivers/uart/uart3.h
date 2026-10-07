@@ -21,4 +21,7 @@ extern TaskHandle_t vn200TaskHandle;
  * iteration, never from main - see the note in the .c file. */
 void uart3_irq_enable(void);
 
+/* Bytes dropped because the RX ring was full. */
+uint32_t uart3_rx_dropped(void);
+
 #endif

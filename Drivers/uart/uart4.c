@@ -13,6 +13,9 @@ static uint8_t uart4_rx_buf[UART4_DMA_BUF_SIZE];
 static volatile uint16_t uart4_rx_head = 0U;
 static volatile uint16_t uart4_rx_tail = 0U;
 
+/* Bytes lost because the ring was full. ISR writes, any task reads. */
+static volatile uint32_t uart4_rx_dropped_count = 0U;
+
 TaskHandle_t dvlTaskHandle = NULL;
 
 
@@ -39,6 +42,7 @@ static void uart4_rx_store(
          */
         if (next_head == uart4_rx_tail)
         {
+            uart4_rx_dropped_count += (uint32_t)(length - i);
             return;
         }
 
@@ -216,6 +220,13 @@ void uart4_init(void)
 
 
     /*
+     * Half-transfer and transfer-complete interrupts: see
+     * uart4_dma_drain().
+     */
+    DMA1_Stream2->CR |= DMA_SxCR_HTIE | DMA_SxCR_TCIE;
+
+
+    /*
      * Enable DMA.
      */
     DMA1_Stream2->CR |= DMA_SxCR_EN;
@@ -229,95 +240,98 @@ void uart4_init(void)
         6
     );
 
+    /* Same priority as UART4 on purpose: both handlers update
+     * last_dma_pos, and equal priorities cannot preempt each other. */
+    NVIC_SetPriority(DMA1_Stream2_IRQn, 6);
+
     /* NVIC_EnableIRQ deferred to uart4_irq_enable() - see below. */
 }
 
 
 //===========================================================================================================================
+/*
+ * Move whatever the DMA has written since the last call into the ring
+ * buffer, then wake the DVL task.
+ *
+ * The DMA position is SIZE - NDTR, which says where the DMA is, not how
+ * far it has gone. With the IDLE interrupt as the only trigger, a burst of
+ * exactly 256 bytes with no gap brings the position back to where it
+ * was and the whole burst looks like no data at all, and a stream with no
+ * gaps never raises IDLE. The half-transfer and transfer-complete
+ * interrupts fire every half buffer, so between two calls the DMA can
+ * never move a full lap. USART1 already had this fix (uart_packet.c).
+ */
+static void uart4_dma_drain(void)
+{
+    uint16_t current_pos =
+        (uint16_t)(UART4_DMA_BUF_SIZE - DMA1_Stream2->NDTR);
+
+    if (current_pos >= UART4_DMA_BUF_SIZE)
+    {
+        current_pos = 0U;
+    }
+
+    uint16_t moved = 0U;
+
+    if (current_pos > last_dma_pos)
+    {
+        moved = (uint16_t)(current_pos - last_dma_pos);
+        uart4_rx_store(&dma4_rx_buf[last_dma_pos], moved);
+    }
+    else if (current_pos < last_dma_pos)
+    {
+        uart4_rx_store(&dma4_rx_buf[last_dma_pos],
+                     (uint16_t)(UART4_DMA_BUF_SIZE - last_dma_pos));
+        uart4_rx_store(&dma4_rx_buf[0], current_pos);
+        moved = (uint16_t)(UART4_DMA_BUF_SIZE - last_dma_pos + current_pos);
+    }
+
+    last_dma_pos = current_pos;
+
+    if ((moved != 0U) && (dvlTaskHandle != NULL))
+    {
+        BaseType_t woken = pdFALSE;
+
+        xTaskNotifyFromISR(dvlTaskHandle, (1UL << 0), eSetBits, &woken);
+        portYIELD_FROM_ISR(woken);
+    }
+}
+
+
 void UART4_IRQHandler(void)
 {
     if (UART4->SR & USART_SR_IDLE)
     {
         volatile uint32_t dummy;
 
-
-        /*
-         * Clear IDLE:
-         *
-         * read SR, then DR.
-         */
+        /* Clear IDLE: read SR, then DR. */
         dummy = UART4->SR;
         dummy = UART4->DR;
-
-
-        /*
-         * Current DMA write position.
-         */
-        uint16_t current_pos =
-            UART4_DMA_BUF_SIZE -
-            DMA1_Stream2->NDTR;
-
-
-        /*
-         * No wrap.
-         */
-        if (current_pos > last_dma_pos)
-        {
-            uart4_rx_store(
-                &dma4_rx_buf[last_dma_pos],
-                current_pos - last_dma_pos
-            );
-        }
-
-
-        /*
-         * DMA wrapped.
-         */
-        else if (current_pos < last_dma_pos)
-        {
-            uart4_rx_store(
-                &dma4_rx_buf[last_dma_pos],
-                UART4_DMA_BUF_SIZE -
-                last_dma_pos
-            );
-
-            uart4_rx_store(
-                &dma4_rx_buf[0],
-                current_pos
-            );
-        }
-
-
-        /*
-         * Remember current DMA position.
-         */
-        last_dma_pos =
-            current_pos;
-
-
-        /*
-         * Wake DVL task.
-         */
-        if (dvlTaskHandle != NULL)
-        {
-            BaseType_t xHigherPriorityTaskWasWoken =
-                pdFALSE;
-
-            xTaskNotifyFromISR(
-                dvlTaskHandle,
-                (1UL << 0),
-                eSetBits,
-                &xHigherPriorityTaskWasWoken
-            );
-
-            portYIELD_FROM_ISR(
-                xHigherPriorityTaskWasWoken
-            );
-        }
-
-
         (void)dummy;
+
+        uart4_dma_drain();
     }
+}
+
+
+void DMA1_Stream2_IRQHandler(void)
+{
+    const uint32_t mask = DMA_LISR_HTIF2 | DMA_LISR_TCIF2;
+
+    if ((DMA1->LISR & mask) == 0U)
+    {
+        return;
+    }
+
+    DMA1->LIFCR = DMA_LIFCR_CHTIF2 | DMA_LIFCR_CTCIF2;
+
+    uart4_dma_drain();
+}
+
+
+uint32_t uart4_rx_dropped(void)
+{
+    return uart4_rx_dropped_count;
 }
 
 
@@ -376,4 +390,5 @@ uint16_t uart4_read(
 void uart4_irq_enable(void)
 {
     NVIC_EnableIRQ(UART4_IRQn);
+    NVIC_EnableIRQ(DMA1_Stream2_IRQn);
 }

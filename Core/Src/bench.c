@@ -21,7 +21,7 @@
  *   w  256-byte DMA wrap test (with the HT/TC fix)
  *   v  same, HT/TC events ignored: the pre-fix behaviour
  *   p  PWM capture report on PA15     P  toggle PWM signature outputs
- *   i  MPU-6050 stress, i2c_read()    I  same, i2c_read_rm() (RM0390 sequences)
+ *   i  MPU-6050 stress, i2c_read_legacy()    I  same, i2c_read() (RM0390 sequences)
  *   K  suspend comms_task             k  resume it
  *   F  trip configASSERT (fault latch test)
  *   W  hang control_task (watchdog test; needs ENABLE_IWDG)
@@ -604,7 +604,7 @@ static uint32_t msp_used(void)
 
 static volatile uint8_t mpu_req;             /* 0 none, 1 legacy, 2 RM0390 */
 
-typedef I2C_Status (*ReadFn)(uint8_t, uint8_t *, uint8_t);
+typedef I2C_Status (*ReadFn)(uint8_t, uint8_t *, uint16_t);
 
 typedef struct
 {
@@ -662,7 +662,7 @@ static bool temp_plausible(const uint8_t *b)
 
 static void mpu_stress(uint8_t which)
 {
-    ReadFn rd = (which == 2U) ? i2c_read_rm : i2c_read;
+    ReadFn rd = (which == 2U) ? i2c_read : i2c_read_legacy;
     const char *name = (which == 2U) ? "rm0390" : "legacy";
     MpuErr e;
     memset(&e, 0, sizeof(e));
