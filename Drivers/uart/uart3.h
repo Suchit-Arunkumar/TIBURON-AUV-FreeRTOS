@@ -6,7 +6,8 @@
 
 #include <stdint.h>
 
-#define UART3_DMA_BUF_SIZE 256
+#define UART3_DMA_BUF_SIZE  256
+#define UART3_RX_RING_SIZE 4096
 
 void uart3_init(void);
 
