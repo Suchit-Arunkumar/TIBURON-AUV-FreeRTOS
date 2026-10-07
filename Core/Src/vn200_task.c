@@ -82,25 +82,19 @@ void vn200_task(void *argument)
 
 
         /*
-         * Drain all bytes accumulated by UART3.
+         * Drain everything UART3 has buffered, 64 bytes at a time, and
+         * feed it to the packet assembler. Reading only one chunk per
+         * wake-up left the rest waiting for the next interrupt, so a
+         * backlog could build until the ring overflowed.
          */
-        uint16_t received =
-            uart3_read(
-                rx_data,
-                sizeof(rx_data)
-            );
+        uint16_t received;
 
-
-        /*
-         * Feed bytes into VN-200 packet assembler.
-         */
-        for (uint16_t i = 0U;
-             i < received;
-             i++)
+        while ((received = uart3_read(rx_data, sizeof(rx_data))) > 0U)
         {
-            vn200_feed_byte(
-                rx_data[i]
-            );
+            for (uint16_t i = 0U; i < received; i++)
+            {
+                vn200_feed_byte(rx_data[i]);
+            }
         }
 
 

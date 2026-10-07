@@ -13,6 +13,9 @@ static uint8_t uart3_rx_buf[UART3_DMA_BUF_SIZE];
 static volatile uint16_t uart3_rx_head = 0;
 static volatile uint16_t uart3_rx_tail = 0;
 
+/* Bytes lost because the ring was full. ISR writes, any task reads. */
+static volatile uint32_t uart3_rx_dropped_count = 0;
+
 TaskHandle_t vn200TaskHandle = NULL;
 
 
@@ -30,6 +33,7 @@ static void uart3_rx_store(const uint8_t *data, uint16_t length)
 		 */
 		if(next_head == uart3_rx_tail)
 		{
+			uart3_rx_dropped_count += (uint32_t)(length - i);
 			return;
 		}
 
@@ -210,92 +214,113 @@ void uart3_init(void)
 
 
 	/*
-	 * 23. Enable DMA stream
+	 * 23. Half-transfer and transfer-complete interrupts: see
+	 *     uart3_dma_drain().
+	 */
+	DMA1_Stream1->CR |= DMA_SxCR_HTIE | DMA_SxCR_TCIE;
+
+
+	/*
+	 * 24. Enable DMA stream
 	 */
 	DMA1_Stream1->CR |= DMA_SxCR_EN;
 
 
 	/*
-	 * 24. Enable USART3 interrupt
+	 * 25. Interrupt priorities. Equal on purpose: both handlers
+	 *     update last_dma_pos, and equal priorities cannot preempt
+	 *     each other.
 	 */
 	NVIC_SetPriority(USART3_IRQn, 6);
+	NVIC_SetPriority(DMA1_Stream1_IRQn, 6);
 	/* NVIC_EnableIRQ deferred to uart3_irq_enable() - see below. */
 }
 
 
 //===========================================================================================================================
+/*
+ * Move whatever the DMA has written since the last call into the ring
+ * buffer, then wake the VN-200 task.
+ *
+ * The DMA position is SIZE - NDTR, which says where the DMA is, not how
+ * far it has gone. With the IDLE interrupt as the only trigger, a burst of
+ * exactly 256 bytes with no gap brings the position back to where it
+ * was and the whole burst looks like no data at all, and a stream with no
+ * gaps never raises IDLE. The half-transfer and transfer-complete
+ * interrupts fire every half buffer, so between two calls the DMA can
+ * never move a full lap. USART1 already had this fix (uart_packet.c).
+ */
+static void uart3_dma_drain(void)
+{
+    uint16_t current_pos =
+        (uint16_t)(UART3_DMA_BUF_SIZE - DMA1_Stream1->NDTR);
+
+    if (current_pos >= UART3_DMA_BUF_SIZE)
+    {
+        current_pos = 0U;
+    }
+
+    uint16_t moved = 0U;
+
+    if (current_pos > last_dma_pos)
+    {
+        moved = (uint16_t)(current_pos - last_dma_pos);
+        uart3_rx_store(&dma3_rx_buf[last_dma_pos], moved);
+    }
+    else if (current_pos < last_dma_pos)
+    {
+        uart3_rx_store(&dma3_rx_buf[last_dma_pos],
+                     (uint16_t)(UART3_DMA_BUF_SIZE - last_dma_pos));
+        uart3_rx_store(&dma3_rx_buf[0], current_pos);
+        moved = (uint16_t)(UART3_DMA_BUF_SIZE - last_dma_pos + current_pos);
+    }
+
+    last_dma_pos = current_pos;
+
+    if ((moved != 0U) && (vn200TaskHandle != NULL))
+    {
+        BaseType_t woken = pdFALSE;
+
+        xTaskNotifyFromISR(vn200TaskHandle, (1UL << 0), eSetBits, &woken);
+        portYIELD_FROM_ISR(woken);
+    }
+}
+
+
 void USART3_IRQHandler(void)
 {
-	if(USART3->SR & USART_SR_IDLE)
-	{
-		volatile uint32_t dummy;
+    if (USART3->SR & USART_SR_IDLE)
+    {
+        volatile uint32_t dummy;
 
-		/*
-		 * Clear USART IDLE flag
-		 *
-		 * Read SR followed by DR.
-		 */
-		dummy = USART3->SR;
-		dummy = USART3->DR;
+        /* Clear IDLE: read SR, then DR. */
+        dummy = USART3->SR;
+        dummy = USART3->DR;
+        (void)dummy;
 
-		/*
-		 * Current DMA write position
-		 */
-		uint16_t current_pos =
-			UART3_DMA_BUF_SIZE -
-			DMA1_Stream1->NDTR;
+        uart3_dma_drain();
+    }
+}
 
 
-		/*
-		 * DMA has not wrapped around.
-		 */
-		if(current_pos > last_dma_pos)
-		{
-			uart3_rx_store(
-				&dma3_rx_buf[last_dma_pos],
-				current_pos - last_dma_pos
-			);
-		}
+void DMA1_Stream1_IRQHandler(void)
+{
+    const uint32_t mask = DMA_LISR_HTIF1 | DMA_LISR_TCIF1;
+
+    if ((DMA1->LISR & mask) == 0U)
+    {
+        return;
+    }
+
+    DMA1->LIFCR = DMA_LIFCR_CHTIF1 | DMA_LIFCR_CTCIF1;
+
+    uart3_dma_drain();
+}
 
 
-		/*
-		 * DMA wrapped around.
-		 */
-		else if(current_pos < last_dma_pos)
-		{
-			uart3_rx_store(
-				&dma3_rx_buf[last_dma_pos],
-				UART3_DMA_BUF_SIZE - last_dma_pos
-			);
-
-			uart3_rx_store(
-				&dma3_rx_buf[0],
-				current_pos
-			);
-		}
-
-
-		/*
-		 * Remember current DMA position.
-		 */
-		last_dma_pos = current_pos;
-
-		if (vn200TaskHandle != NULL)
-		{
-		    BaseType_t xHigherPriorityTaskWasWoken = pdFALSE;
-
-		    xTaskNotifyFromISR(
-		        vn200TaskHandle,
-		        (1UL << 0),
-		        eSetBits,
-		        &xHigherPriorityTaskWasWoken
-		    );
-
-		    portYIELD_FROM_ISR(xHigherPriorityTaskWasWoken);
-		}
-
-		(void)dummy;
-	}
+uint32_t uart3_rx_dropped(void)
+{
+    return uart3_rx_dropped_count;
 }
 
 
@@ -345,4 +370,5 @@ uint16_t uart3_read(uint8_t *out, uint16_t max_len)
 void uart3_irq_enable(void)
 {
     NVIC_EnableIRQ(USART3_IRQn);
+    NVIC_EnableIRQ(DMA1_Stream1_IRQn);
 }

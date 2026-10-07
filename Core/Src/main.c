@@ -171,6 +171,9 @@ static void print_health(void)
                    (unsigned long)comms_cmd_drops());
     console_printf("tx frames : %lu dropped (ring full)",
                    (unsigned long)comms_tx_drops());
+    console_printf("rx drops  : VN200=%lu DVL=%lu bytes",
+                   (unsigned long)uart3_rx_dropped(),
+                   (unsigned long)uart4_rx_dropped());
     console_printf("wdg/ramp  : IWDG=%s  slew_limit=%s",
                    iwdg_is_enabled() ? "ARMED" : "DISABLED",
                    control_loop_ramping() ? "ramping" : "off (full authority)");
