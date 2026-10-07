@@ -2,7 +2,7 @@
 #include "uart_packet.h"
 #include "packet.h"
 #include "control_loop.h"
-#include "bar30_task.h"
+#include "depth_task.h"
 #include <string.h>
 #include "bench.h"
 
@@ -190,18 +190,19 @@ void comms_task(void *argument)
             /*
              * Same split as the Pico firmware:
              *   depth_m     - the Pi's fused depth, what the PID acts on
-             *   raw_depth_m - the onboard Bar30, telemetry only
+             *   raw_depth_m - the onboard depth sensor (Bar30, or the
+             *                 analog backup), telemetry only
              *
-             * xQueuePeek, not Receive: bar30Queue is depth-1 overwrite and
-             * this only reads the latest value. Stays 0 with no sensor.
+             * xQueuePeek, not Receive: depthQueue holds one sample, and
+             * other readers want it too. Stays 0 with no sensor.
              */
             telemetry.depth_m = ctl.pose[2];
 
-            float raw_depth = 0.0f;
-            if ((bar30Queue != NULL) &&
-                (xQueuePeek(bar30Queue, &raw_depth, 0) == pdPASS))
+            DepthSample depth;
+            if ((depthQueue != NULL) &&
+                (xQueuePeek(depthQueue, &depth, 0) == pdPASS))
             {
-                telemetry.raw_depth_m = raw_depth;
+                telemetry.raw_depth_m = depth.depth_m;
             }
 
             for (int i = 0; i < N_DOF; i++)

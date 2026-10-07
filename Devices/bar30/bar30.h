@@ -8,7 +8,7 @@
 /*
  * Blue Robotics Bar30: an MS5837-30BA on I2C address 0x76.
  *
- * Only called from depth_task (bar30_task today). It waits for each
+ * Only called from depth_task. It waits for each
  * conversion with vTaskDelay, so the I2C bus is free for the BNO085 in
  * between.
  */

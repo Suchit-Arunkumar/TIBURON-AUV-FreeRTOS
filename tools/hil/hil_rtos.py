@@ -821,14 +821,14 @@ class FakeSerial:
     def _health(self):
         for ln in ("--- HEALTH ---", "clk       : OK (HSE bypass, 180 MHz)", "heap free : 8704 B of 22528 B",
                    "heap min  : 8704 B ever free", "log drops : 0 records", "con drops : 0 lines",
-                   "sensors   : VN200=ABSENT BNO085=ABSENT DVL=ABSENT Bar30=ABSENT", "link      : ok  armed=0  recovery=0/3",
+                   "sensors   : VN200=ABSENT BNO085=ABSENT DVL=ABSENT Bar30=ABSENT ADC=ABSENT", "link      : ok  armed=0  recovery=0/3",
                    "cmd pkts  : 0 valid, 0 dropped (queue full)", "wdg/ramp  : IWDG=ARMED  slew_limit=ramping",
                    "sd blocks : 0 ok, 0 err", "log stage : 0 recs, 0 blks, 0 post drops", "--- END ---"):
             self._emit(ln)
 
     def _stack(self):
         self._emit("--- STACK HWM (free words = min ever seen) ---")
-        for n in ("Control", "Comms", "IMU", "DVL", "Bar30", "SPIOwner", "Logging", "Dummy"):
+        for n in ("Control", "Comms", "IMU", "DVL", "Depth", "SPIOwner", "Logging", "Dummy"):
             self._emit(f"{n:<8s} alloc= 256 w  free= 150 w ( 600 B)  used<= 424 B")
         self._emit("--- END ---")
 
@@ -850,7 +850,7 @@ class FakeSerial:
             self._emit(f"B:inj sent={tlm} tlm={tlm} tbad=0 rtok={tlm if self.inj != 'off' else 0} rtbad=0 poison=0")
             self._emit(f"B:rx dma={tlm * 124} ringdrop=0 dmaev={tlm} idleev={tlm}")
             self._emit(f"B:ctl fs={self.fs} armed={self.armed} rec={self.rec} valid=10 qdrop=0")
-            self._emit("B:cpu win_us=10000000 Ctl=12 Com=80 IMU=0 DVL=0 B30=1 SPI=0 Log=0 Dum=5")
+            self._emit("B:cpu win_us=10000000 Ctl=12 Com=80 IMU=0 DVL=0 Dep=1 SPI=0 Log=0 Dum=5")
             self._emit("B:cpu idle=900 (permille of window)")
             self._emit("B:msp used=312 size=1024 heap_free=8704 heap_min=8704")
             self._emit("B:end")
