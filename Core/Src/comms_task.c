@@ -1,7 +1,6 @@
 #include "comms_task.h"
 #include "uart_packet.h"
 #include "packet.h"
-#include "uart_packet.h"
 #include "control_loop.h"
 #include "bar30_task.h"
 #include <string.h>
@@ -37,6 +36,77 @@ uint32_t comms_cmd_valid(void)
     return cmd_valid_count;
 }
 
+/*
+ * Outgoing frames.
+ *
+ * A small ring of whole frames that the TX DMA sends in order. Only
+ * comms_task touches it: it builds a frame in the slot at head, and when
+ * the DMA reports a frame done (COMMS_NOTIFY_TX_DONE) it frees the slot
+ * at tail and starts the next one. The ISR never reads or writes the
+ * ring, so the ring needs no lock.
+ *
+ * A frame takes 5.4 ms on the wire and comms_task queues at most a few
+ * per 20 ms tick, so four slots never fill on a healthy link. If they
+ * ever do, the new frame is dropped and counted.
+ */
+#define TX_SLOTS  4U
+
+static uint8_t tx_ring[TX_SLOTS][PACKET_SIZE];
+static uint8_t tx_head      = 0;
+static uint8_t tx_tail      = 0;
+static uint8_t tx_count     = 0;
+static bool    tx_in_flight = false;
+
+/* Written by comms_task, read by dummy_task's health report. */
+static volatile uint32_t tx_drop_count = 0;
+
+uint32_t comms_tx_drops(void)
+{
+    return tx_drop_count;
+}
+
+/* Slot to build the next frame in, or NULL (counted) if the ring is full. */
+static uint8_t *tx_reserve(void)
+{
+    if (tx_count >= TX_SLOTS)
+    {
+        tx_drop_count++;
+        return NULL;
+    }
+
+    return tx_ring[tx_head];
+}
+
+/* The frame in the reserved slot is complete: queue it. */
+static void tx_commit(void)
+{
+    tx_head = (uint8_t)((tx_head + 1U) % TX_SLOTS);
+    tx_count++;
+}
+
+/* Start the DMA on the oldest queued frame, if it is idle. */
+static void tx_kick(void)
+{
+    if (!tx_in_flight && (tx_count > 0U))
+    {
+        if (uart1_tx_dma_start(tx_ring[tx_tail], PACKET_SIZE))
+        {
+            tx_in_flight = true;
+        }
+    }
+}
+
+/* The DMA finished the frame at tail: free its slot. */
+static void tx_done(void)
+{
+    if (tx_in_flight)
+    {
+        tx_in_flight = false;
+        tx_tail = (uint8_t)((tx_tail + 1U) % TX_SLOTS);
+        tx_count--;
+    }
+}
+
 void comms_task(void *argument)
 {
     (void)argument;
@@ -60,8 +130,13 @@ void comms_task(void *argument)
     	    portMAX_DELAY
     	);
 
+        if (notify_value & COMMS_NOTIFY_TX_DONE)
+        {
+            tx_done();
+        }
+
         /* RX: command packet arrived */
-        if (notify_value & (1UL << 0))
+        if (notify_value & COMMS_NOTIFY_RX)
         {
             CommandPayload cmd;
 
@@ -96,10 +171,13 @@ void comms_task(void *argument)
         }
 
         /* TX: telemetry requested */
-        if ((notify_value & (1UL << 1)) && !bench_comms_skip_telemetry())
+        uint8_t *slot = NULL;
+
+        if ((notify_value & COMMS_NOTIFY_TELEMETRY) &&
+            !bench_comms_skip_telemetry() &&
+            ((slot = tx_reserve()) != NULL))
         {
             TelemetryPayload telemetry;
-            uint8_t tx_buf[PACKET_SIZE];
 
             memset(&telemetry, 0, sizeof(telemetry));
 
@@ -152,20 +230,16 @@ void comms_task(void *argument)
                 sizeof(pwm_aligned)
             );
 
-            packet_build_telemetry(
-                &telemetry,
-                tx_buf
-            );
-
-            uart1_write_buf(
-                tx_buf,
-                PACKET_SIZE
-            );
+            packet_build_telemetry(&telemetry, slot);
+            tx_commit();
         }
 
-        /* BENCH_HIL: loopback injector writes after telemetry, same task, so
-         * the two never interleave on the wire. Nothing otherwise. */
-        if (notify_value & (1UL << 1))
+        tx_kick();
+
+        /* BENCH_HIL: loopback injector writes after telemetry. Its blocking
+         * write waits for the DMA frame to finish first, so the two never
+         * interleave on the wire. Nothing otherwise. */
+        if (notify_value & COMMS_NOTIFY_TELEMETRY)
         {
             bench_comms_after_tx();
         }

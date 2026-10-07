@@ -169,6 +169,8 @@ static void print_health(void)
     console_printf("cmd pkts  : %lu valid, %lu dropped (queue full)",
                    (unsigned long)comms_cmd_valid(),
                    (unsigned long)comms_cmd_drops());
+    console_printf("tx frames : %lu dropped (ring full)",
+                   (unsigned long)comms_tx_drops());
     console_printf("wdg/ramp  : IWDG=%s  slew_limit=%s",
                    iwdg_is_enabled() ? "ARMED" : "DISABLED",
                    control_loop_ramping() ? "ramping" : "off (full authority)");

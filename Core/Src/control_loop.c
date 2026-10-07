@@ -680,7 +680,7 @@ void control_task(void *argument)
 	    /* Tell Comms Task that a telemetry update is ready */
 	    xTaskNotify(
 	        commsTaskHandle,
-	        (1UL << 1),
+	        COMMS_NOTIFY_TELEMETRY,
 	        eSetBits
 	    );
 
