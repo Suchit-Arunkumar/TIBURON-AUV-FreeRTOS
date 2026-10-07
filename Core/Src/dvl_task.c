@@ -9,28 +9,21 @@
 
 #include "sensor_status.h"
 #include "console.h"
+
 /*
- * Absence detection.
+ * Health is judged on good frames, not on bytes, the same as vn200_task.
+ * A frame with no bottom lock still counts as good: the DVL is alive and
+ * talking, it just cannot see the bottom (velocity_valid is false).
  *
- * The ISR notifies this task on every UART IDLE. With no sensor wired
- * there is no traffic and no notification ever arrives, so a
- * portMAX_DELAY wait would park the task forever - indistinguishable
- * from a crash. A bounded wait lets it notice, publish SENSOR_ABSENT and
- * carry on.
- *
- * ABSENT after this many consecutive timeouts from boot; FAULTED if data
- * had been flowing and then stopped. Nothing is published in either
- * state, so no stale value ever reaches the queue.
+ * The Wayfinder pings every ~55 ms at 5 m altitude and slower further up
+ * (Wayfinder DVL Guide, "Ping Timing"), so 3 s of silence means it has
+ * stopped, not that it is between pings.
  */
 #define DVL_WAIT_MS          500U
-#define DVL_ABSENT_TIMEOUTS  6U     /* ~3 s of silence */
-
-
+#define DVL_SILENT_MS        3000U
 
 QueueHandle_t dvlQueue = NULL;
 
-
-//===========================================================================================================================
 void dvl_task(void *argument)
 {
     (void)argument;
@@ -40,42 +33,12 @@ void dvl_task(void *argument)
     /* Enable UART4's interrupt now that a task context exists. */
     uart4_irq_enable();
 
-    uint32_t silent_cycles = 0;
-    uint8_t  announced     = 0;
+    TickType_t last_good = xTaskGetTickCount();
+    uint8_t    announced = 0U;
 
     while (1)
     {
-        /*
-         * Sleep until the UART4 IDLE ISR wakes us, or the wait expires.
-         * Bounded, not portMAX_DELAY - see the note above.
-         */
-        if (ulTaskNotifyTake(
-                pdTRUE,
-                pdMS_TO_TICKS(DVL_WAIT_MS)
-            ) == 0U)
-        {
-            if (silent_cycles < DVL_ABSENT_TIMEOUTS)
-            {
-                silent_cycles++;
-            }
-
-            if (silent_cycles >= DVL_ABSENT_TIMEOUTS)
-            {
-                SensorState next = (g_dvl_state == SENSOR_OK)
-                                 ? SENSOR_FAULTED : SENSOR_ABSENT;
-
-                if (g_dvl_state != next)
-                {
-                    g_dvl_state = next;
-                    console_printf("DVL: %s", sensor_state_str(next));
-                }
-            }
-
-            continue;
-        }
-
-        silent_cycles = 0;
-
+        (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(DVL_WAIT_MS));
 
         /*
          * Drain everything UART4 has buffered, 128 bytes at a time, and
@@ -88,37 +51,43 @@ void dvl_task(void *argument)
         {
             for (uint16_t i = 0U; i < received; i++)
             {
-                if (dvl_feed_byte(rx_data[i]))
+                DVLData data;
+
+                if (!dvl_feed_byte(rx_data[i], &data))
                 {
-                    DVLData data;
+                    continue;
+                }
 
-                    if (dvl_get_data(&data))
+                last_good = xTaskGetTickCount();
+
+                if (g_dvl_state != SENSOR_OK)
+                {
+                    g_dvl_state = SENSOR_OK;
+
+                    if (announced == 0U)
                     {
-                        if (g_dvl_state != SENSOR_OK)
-                        {
-                            g_dvl_state = SENSOR_OK;
-
-                            if (announced == 0U)
-                            {
-                                announced = 1U;
-                                console_printf("DVL: ok");
-                            }
-                        }
-
-                        /*
-                         * Queue length = 1.
-                         *
-                         * Keep newest measurement.
-                         */
-                        if (dvlQueue != NULL)
-                        {
-                            xQueueOverwrite(
-                                dvlQueue,
-                                &data
-                            );
-                        }
+                        announced = 1U;
+                        console_printf("DVL: ok");
                     }
                 }
+
+                /* Length-1 queue: keep only the newest frame. */
+                if (dvlQueue != NULL)
+                {
+                    xQueueOverwrite(dvlQueue, &data);
+                }
+            }
+        }
+
+        if ((xTaskGetTickCount() - last_good) > pdMS_TO_TICKS(DVL_SILENT_MS))
+        {
+            SensorState next = (g_dvl_state == SENSOR_OK)
+                             ? SENSOR_FAULTED : SENSOR_ABSENT;
+
+            if ((g_dvl_state != next) && (g_dvl_state != SENSOR_FAULTED))
+            {
+                g_dvl_state = next;
+                console_printf("DVL: %s", sensor_state_str(next));
             }
         }
     }

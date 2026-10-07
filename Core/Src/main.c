@@ -174,6 +174,14 @@ static void print_health(void)
     console_printf("rx drops  : VN200=%lu DVL=%lu bytes",
                    (unsigned long)uart3_rx_dropped(),
                    (unsigned long)uart4_rx_dropped());
+    console_printf("vn200 pkt : %lu ok, %lu bad",
+                   (unsigned long)vn200_packets_ok(),
+                   (unsigned long)vn200_packets_bad());
+    console_printf("dvl frame : %lu ok, %lu bad (sum incl=%lu excl=%lu)",
+                   (unsigned long)dvl_frames_ok(),
+                   (unsigned long)dvl_frames_bad(),
+                   (unsigned long)dvl_sum_incl_count(),
+                   (unsigned long)dvl_sum_excl_count());
     console_printf("wdg/ramp  : IWDG=%s  slew_limit=%s",
                    iwdg_is_enabled() ? "ARMED" : "DISABLED",
                    control_loop_ramping() ? "ramping" : "off (full authority)");
