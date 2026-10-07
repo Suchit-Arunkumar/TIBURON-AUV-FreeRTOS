@@ -101,10 +101,11 @@
 								<listOptionValue builtIn="false" value="../Drivers/adc"/>
 								<listOptionValue builtIn="false" value="../Devices/sd_card"/>
 								<listOptionValue builtIn="false" value="../Devices/oled"/>
-								<listOptionValue builtIn="false" value="../Drivers/spi"/>
-								<listOptionValue builtIn="false" value="../Protocol"/>
 								<listOptionValue builtIn="false" value="../Drivers/uart"/>
 								<listOptionValue builtIn="false" value="../Drivers/timer"/>
+								<listOptionValue builtIn="false" value="../Drivers/spi"/>
+								<listOptionValue builtIn="false" value="../Protocol"/>
+								<listOptionValue builtIn="false" value="../Drivers"/>
 								<listOptionValue builtIn="false" value="../Drivers/gpio"/>
 								<listOptionValue builtIn="false" value="../Drivers/STM32F4xx_HAL_Driver/Inc"/>
 								<listOptionValue builtIn="false" value="../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy"/>
@@ -179,10 +180,28 @@
 								</option>
 								<option IS_BUILTIN_EMPTY="false" IS_VALUE_EMPTY="false" id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.option.includepaths.999335114" name="Include paths (-I)" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.option.includepaths" useByScannerDiscovery="false" valueType="includePath">
 									<listOptionValue builtIn="false" value="../Core/Inc"/>
+									<listOptionValue builtIn="false" value="&quot;${ProjDirPath}/Protocol/sd_card&quot;"/>
+									<listOptionValue builtIn="false" value="&quot;${ProjDirPath}/Middlewares/FreeRTOS/Source/include&quot;"/>
+									<listOptionValue builtIn="false" value="&quot;${ProjDirPath}/Middlewares/FreeRTOS/Source/portable/GCC/ARM_CM4F&quot;"/>
+									<listOptionValue builtIn="false" value="../Drivers/dac"/>
+									<listOptionValue builtIn="false" value="../Drivers/adc"/>
+									<listOptionValue builtIn="false" value="../Devices/sd_card"/>
+									<listOptionValue builtIn="false" value="../Devices/oled"/>
+									<listOptionValue builtIn="false" value="../Drivers/uart"/>
+									<listOptionValue builtIn="false" value="../Drivers/timer"/>
+									<listOptionValue builtIn="false" value="../Drivers/spi"/>
+									<listOptionValue builtIn="false" value="../Protocol"/>
+									<listOptionValue builtIn="false" value="../Drivers"/>
+									<listOptionValue builtIn="false" value="../Drivers/gpio"/>
 									<listOptionValue builtIn="false" value="../Drivers/STM32F4xx_HAL_Driver/Inc"/>
 									<listOptionValue builtIn="false" value="../Drivers/STM32F4xx_HAL_Driver/Inc/Legacy"/>
 									<listOptionValue builtIn="false" value="../Drivers/CMSIS/Device/ST/STM32F4xx/Include"/>
 									<listOptionValue builtIn="false" value="../Drivers/CMSIS/Include"/>
+									<listOptionValue builtIn="false" value="../Drivers/i2c"/>
+									<listOptionValue builtIn="false" value="../Devices/bar30"/>
+									<listOptionValue builtIn="false" value="../Drivers/iwdg"/>
+									<listOptionValue builtIn="false" value="&quot;${ProjDirPath}/Devices/vn200&quot;"/>
+									<listOptionValue builtIn="false" value="&quot;${ProjDirPath}/Devices/dvl&quot;"/>
 								</option>
 								<inputType id="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c.614582256" superClass="com.st.stm32cube.ide.mcu.gnu.managedbuild.tool.c.compiler.input.c"/>
 							</tool>
