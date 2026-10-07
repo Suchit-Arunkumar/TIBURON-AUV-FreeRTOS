@@ -20,6 +20,11 @@ The STM32:
 4. runs a PID controller at 50 Hz and drives 8 thrusters;
 5. stops the thrusters by itself if something goes wrong.
 
+At SAUVC 2026 this job was done by the team's Raspberry Pi Pico 2 (RP2350)
+firmware, with the VN-200 and DVL on the Pi. This STM32 firmware replaces the
+Pico. It uses the same packet format and the same control code (ported from
+the Pico), and it is being tested on the bench before going on the vehicle.
+
 ```
  Sensors ──► STM32 ──► readings ──► Raspberry Pi
                  ◄── commands ◄────
@@ -158,12 +163,14 @@ debugger can pause it.
 
 | What | How | Status |
 |---|---|---|
-| RTOS timing, Pi link, failsafe, watchdog, I2C | `tools/hil/hil_rtos.py` drives the board from a laptop | 18 of 19 tests passed on the bench ([report](tools/hil/hil_rtos_report.md)) |
+| RTOS timing, Pi link, failsafe, watchdog, I2C, all 8 PWM outputs | `tools/hil/hil_rtos.py` drives the board from a laptop | All 19 tests passed on the bench, 5 Oct ([reports](tools/hil/reports)) |
 | Sensor parsers and maths | PC tests in `tests/host`, checked against the datasheets | All pass |
 | New sensor drivers, display, SD log changes | `docs/HARDWARE_CHECKLIST.md` | Not yet run on the board |
 
 Measured on the bench: the control loop runs every 20 ms with about 1 µs of
-jitter, and each run takes about 0.1 ms.
+jitter, and each run takes about 0.1 ms. The failsafe tripped 520 ms after the
+last command (500 ms timeout + one 20 ms tick), even with the comms task
+stopped. A frozen control task was reset by the watchdog in about 1.1 s.
 
 The PID gains are still zero: the controller runs, but it has to be tuned in
 the water.

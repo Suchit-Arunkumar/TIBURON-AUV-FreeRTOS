@@ -14,8 +14,7 @@ not just pass/fail.
 python tools/hil/hil_rtos.py --port COM12
 ```
 
-The 5 Oct run ([report](../tools/hil/hil_rtos_report.md)) passed 18 of 19
-tests. Rerun it on the current firmware (Debug build), with the PA9→PA10
+The 5 Oct runs ([reports](../tools/hil/reports)) passed all 19 tests. Rerun it on the current firmware (Debug build), with the PA9→PA10
 jumper fitted. Things to look at in the new report:
 
 - **Comms CPU load.** It was 27% idle and 54% with two frames per tick, from
