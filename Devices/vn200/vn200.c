@@ -1,193 +1,136 @@
 #include "vn200.h"
+
 #include <string.h>
 
-#include "FreeRTOS.h"
-#include "task.h"
+#define VN200_SYNC          0xFAU
+#define VN200_GROUPS        0x01U       /* Common group only           */
+#define VN200_FIELDS        0x0128U     /* YawPitchRoll, AngularRate, Accel */
 
-#define VN200_SYNC              0xFA
+#define VN200_HEADER_LEN    4U          /* sync, group, 2-byte field mask */
+#define VN200_PACKET_LEN    42U         /* header + 36 payload + 2 CRC   */
 
-#define VN200_GROUP_IMU         0x04
-#define VN200_GROUP_ATTITUDE    0x10
+static uint8_t  packet[VN200_PACKET_LEN];
+static uint16_t packet_len = 0U;
 
-#define VN200_GROUPS            0x14
+static uint32_t count_ok  = 0U;
+static uint32_t count_bad = 0U;
 
-#define VN200_IMU_FIELDS        0x0018
-#define VN200_ATT_FIELDS        0x0002
+uint32_t vn200_packets_ok(void)  { return count_ok; }
+uint32_t vn200_packets_bad(void) { return count_bad; }
 
-#define VN200_PACKET_LENGTH     44
-
-static uint8_t vn200_packet[VN200_PACKET_LENGTH];
-static uint16_t vn200_index = 0;
-static VN200Data vn200_latest;
-
-//===========================================================================================================================
-static bool vn200_validate_header(const uint8_t *packet)
-{
-    if (packet[0] != VN200_SYNC)
-    {
-        return false;
-    }
-
-    if (packet[1] != VN200_GROUPS)
-    {
-        return false;
-    }
-
-    uint16_t imu_fields =
-        ((uint16_t)packet[2]) |
-        ((uint16_t)packet[3] << 8);
-
-    if (imu_fields != VN200_IMU_FIELDS)
-    {
-        return false;
-    }
-
-    uint16_t attitude_fields =
-        ((uint16_t)packet[4]) |
-        ((uint16_t)packet[5] << 8);
-
-    if (attitude_fields != VN200_ATT_FIELDS)
-    {
-        return false;
-    }
-
-    return true;
-}
-
-//===========================================================================================================================
-static uint16_t vn200_read_u16(const uint8_t *p)
-{
-    return ((uint16_t)p[0]) |
-           ((uint16_t)p[1] << 8);
-}
-
-//===========================================================================================================================
-static float vn200_read_float(const uint8_t *p)
-{
-    uint32_t raw =
-        ((uint32_t)p[0]) |
-        ((uint32_t)p[1] << 8) |
-        ((uint32_t)p[2] << 16) |
-        ((uint32_t)p[3] << 24);
-
-    float value;
-
-    memcpy(&value, &raw, sizeof(value));
-
-    return value;
-}
-
-//===========================================================================================================================
+/*
+ * CRC-16 exactly as printed in the manual (section 4.4.3).
+ *
+ * The check (section 5.3.5): run it over everything after the sync byte,
+ * including the two CRC bytes. A good packet gives 0. That is easier than
+ * extracting the CRC field, and it does not depend on which byte order
+ * the CRC is sent in.
+ */
 static uint16_t vn200_crc16(const uint8_t *data, uint16_t length)
 {
-    uint16_t crc = 0;
+    uint16_t crc = 0U;
 
-    for (uint16_t i = 0; i < length; i++)
+    for (uint16_t i = 0U; i < length; i++)
     {
-        crc = (uint8_t)(crc >> 8) | (crc << 8);
+        crc  = (uint16_t)((uint8_t)(crc >> 8) | (uint16_t)(crc << 8));
         crc ^= data[i];
-        crc ^= (uint8_t)(crc & 0xFF) >> 4;
-        crc ^= crc << 12;
-        crc ^= (crc & 0x00FF) << 5;
+        crc ^= (uint8_t)(crc & 0xFFU) >> 4;
+        crc ^= (uint16_t)(crc << 12);
+        crc ^= (uint16_t)((crc & 0x00FFU) << 5);
     }
 
     return crc;
 }
 
-//===========================================================================================================================
-bool vn200_parse(const uint8_t *packet,
-                 uint16_t length,
-                 VN200Data *out)
+/* Payload values are little-endian, like the Cortex-M4. */
+static float read_float(const uint8_t *p)
 {
-    if (packet == NULL || out == NULL)
+    float value;
+
+    memcpy(&value, p, sizeof(value));
+    return value;
+}
+
+/*
+ * Drop the first byte of what has been collected and slide forward to the
+ * next 0xFA, if there is one. Throwing the whole buffer away instead would
+ * skip over a real packet that started somewhere inside a bad one.
+ */
+static void resync(void)
+{
+    uint16_t next = 1U;
+
+    while ((next < packet_len) && (packet[next] != VN200_SYNC))
+    {
+        next++;
+    }
+
+    packet_len = (uint16_t)(packet_len - next);
+    memmove(packet, &packet[next], packet_len);
+}
+
+/* The header is fixed for this configuration, so a mismatch shows up as
+ * soon as the first four bytes are in, not 38 bytes later. */
+static bool header_ok(void)
+{
+    uint16_t fields = (uint16_t)(packet[2] | ((uint16_t)packet[3] << 8));
+
+    return (packet[1] == VN200_GROUPS) && (fields == VN200_FIELDS);
+}
+
+bool vn200_feed_byte(uint8_t byte, VN200Data *out)
+{
+    if ((packet_len == 0U) && (byte != VN200_SYNC))
     {
         return false;
     }
 
-    if (length != VN200_PACKET_LENGTH)
+    packet[packet_len++] = byte;
+
+    /*
+     * Re-check after every resync: the bytes that slid to the front may
+     * already be a bad header, or already a complete packet.
+     */
+    for (;;)
     {
-        return false;
+        if ((packet_len >= VN200_HEADER_LEN) && !header_ok())
+        {
+            count_bad++;
+            resync();
+            continue;
+        }
+
+        if (packet_len < VN200_PACKET_LEN)
+        {
+            return false;
+        }
+
+        if (vn200_crc16(&packet[1], VN200_PACKET_LEN - 1U) != 0U)
+        {
+            count_bad++;
+            resync();
+            continue;
+        }
+
+        break;
     }
 
-    if (!vn200_validate_header(packet))
-    {
-        return false;
-    }
+    const uint8_t *p = &packet[VN200_HEADER_LEN];
 
-    uint16_t calculated_crc =
-        vn200_crc16(&packet[1], length - 3U);
+    out->yaw_deg      = read_float(&p[0]);
+    out->pitch_deg    = read_float(&p[4]);
+    out->roll_deg     = read_float(&p[8]);
 
-    uint16_t received_crc =
-        vn200_read_u16(&packet[length - 2U]);
+    out->gyro_x_rad_s = read_float(&p[12]);
+    out->gyro_y_rad_s = read_float(&p[16]);
+    out->gyro_z_rad_s = read_float(&p[20]);
 
-    if (calculated_crc != received_crc)
-    {
-        return false;
-    }
+    out->accel_x_m_s2 = read_float(&p[24]);
+    out->accel_y_m_s2 = read_float(&p[28]);
+    out->accel_z_m_s2 = read_float(&p[32]);
 
-    out->accel_x = vn200_read_float(&packet[6]);
-    out->accel_y = vn200_read_float(&packet[10]);
-    out->accel_z = vn200_read_float(&packet[14]);
-
-    out->gyro_x = vn200_read_float(&packet[18]);
-    out->gyro_y = vn200_read_float(&packet[22]);
-    out->gyro_z = vn200_read_float(&packet[26]);
-
-    out->yaw = vn200_read_float(&packet[30]);
-    out->pitch = vn200_read_float(&packet[34]);
-    out->roll = vn200_read_float(&packet[38]);
-
-    out->valid = true;
+    count_ok++;
+    packet_len = 0U;
 
     return true;
-}
-
-//===========================================================================================================================
-void vn200_feed_byte(uint8_t byte)
-{
-    if (vn200_index == 0)
-    {
-        if (byte != VN200_SYNC)
-        {
-            return;
-        }
-    }
-
-    vn200_packet[vn200_index++] = byte;
-
-    if (vn200_index >= VN200_PACKET_LENGTH)
-    {
-        if (vn200_parse(vn200_packet,
-                        VN200_PACKET_LENGTH,
-                        &vn200_latest))
-        {
-            /* Packet successfully parsed */
-        }
-
-        vn200_index = 0;
-    }
-}
-
-//===========================================================================================================================
-bool vn200_get_data(VN200Data *out)
-{
-    if (out == NULL)
-    {
-        return false;
-    }
-
-    bool valid;
-
-    taskENTER_CRITICAL();
-
-    valid = vn200_latest.valid;
-
-    if (valid)
-    {
-        *out = vn200_latest;
-    }
-
-    taskEXIT_CRITICAL();
-
-    return valid;
 }

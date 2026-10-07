@@ -10,82 +10,47 @@
 
 #include "sensor_status.h"
 #include "console.h"
+
 /*
- * Absence detection.
+ * Health is judged on good packets, not on bytes.
  *
- * The ISR notifies this task on every UART IDLE. With no sensor wired
- * there is no traffic and no notification ever arrives, so a
- * portMAX_DELAY wait would park the task forever - indistinguishable
- * from a crash. A bounded wait lets it notice, publish SENSOR_ABSENT and
- * carry on.
+ * The task wakes on every UART interrupt, but bytes alone prove nothing:
+ * a VN-200 configured for a different output, or a baud mismatch, sends
+ * plenty of bytes and never a valid packet. So the sensor is OK only
+ * while CRC-valid packets keep arriving.
  *
- * ABSENT after this many consecutive timeouts from boot; FAULTED if data
- * had been flowing and then stopped. Nothing is published in either
- * state, so no stale value ever reaches the queue.
+ * VN200_WAIT_MS bounds the wait so the task still runs when nothing at
+ * all arrives (no sensor wired); a portMAX_DELAY wait would park it
+ * forever, indistinguishable from a crash.
+ *
+ * ABSENT: no good packet since boot for VN200_SILENT_MS.
+ * FAULTED: good packets were arriving, then none for VN200_SILENT_MS.
  */
 #define VN200_WAIT_MS          500U
-#define VN200_ABSENT_TIMEOUTS  6U     /* ~3 s of silence */
-
-
+#define VN200_SILENT_MS        3000U
 
 QueueHandle_t vn200Queue = NULL;
-
 
 void vn200_task(void *argument)
 {
     (void)argument;
-
 
     uint8_t rx_data[64];
 
     /* Enable USART3's interrupt now that a task context exists. */
     uart3_irq_enable();
 
-    uint32_t silent_cycles = 0;
-    uint8_t  announced     = 0;
+    TickType_t last_good = xTaskGetTickCount();
+    uint8_t    announced = 0U;
 
     while (1)
     {
-        /*
-         * Sleep until the USART3 IDLE ISR notifies us, or the wait
-         * expires. Bounded, not portMAX_DELAY - see the note above.
-         */
-        if (ulTaskNotifyTake(
-                pdTRUE,
-                pdMS_TO_TICKS(VN200_WAIT_MS)
-            ) == 0U)
-        {
-            /* Nothing arrived within the window. */
-            if (silent_cycles < VN200_ABSENT_TIMEOUTS)
-            {
-                silent_cycles++;
-            }
-
-            if (silent_cycles >= VN200_ABSENT_TIMEOUTS)
-            {
-                SensorState next = (g_vn200_state == SENSOR_OK)
-                                 ? SENSOR_FAULTED : SENSOR_ABSENT;
-
-                if (g_vn200_state != next)
-                {
-                    g_vn200_state = next;
-
-                    /* Announce each transition once, not every cycle. */
-                    console_printf("VN200: %s", sensor_state_str(next));
-                }
-            }
-
-            continue;
-        }
-
-        silent_cycles = 0;
-
+        (void)ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(VN200_WAIT_MS));
 
         /*
-         * Drain everything UART3 has buffered, 64 bytes at a time, and
-         * feed it to the packet assembler. Reading only one chunk per
-         * wake-up left the rest waiting for the next interrupt, so a
-         * backlog could build until the ring overflowed.
+         * Drain everything UART3 has buffered, 64 bytes at a time. Reading
+         * only one chunk per wake-up left the rest waiting for the next
+         * interrupt, so a backlog could build until the ring overflowed.
          */
         uint16_t received;
 
@@ -93,42 +58,45 @@ void vn200_task(void *argument)
         {
             for (uint16_t i = 0U; i < received; i++)
             {
-                vn200_feed_byte(rx_data[i]);
+                VN200Data data;
+
+                if (!vn200_feed_byte(rx_data[i], &data))
+                {
+                    continue;
+                }
+
+                last_good = xTaskGetTickCount();
+
+                if (g_vn200_state != SENSOR_OK)
+                {
+                    g_vn200_state = SENSOR_OK;
+
+                    if (announced == 0U)
+                    {
+                        announced = 1U;
+                        console_printf("VN200: ok");
+                    }
+                }
+
+                /* Length-1 queue: keep only the newest reading. */
+                if (vn200Queue != NULL)
+                {
+                    xQueueOverwrite(vn200Queue, &data);
+                }
             }
         }
 
-
-        /*
-         * Get the newest complete valid VN-200
-         * measurement.
-         */
-        VN200Data data;
-
-
-        if (vn200_get_data(&data))
+        if ((xTaskGetTickCount() - last_good) > pdMS_TO_TICKS(VN200_SILENT_MS))
         {
-            if (g_vn200_state != SENSOR_OK)
-            {
-                g_vn200_state = SENSOR_OK;
+            SensorState next = (g_vn200_state == SENSOR_OK)
+                             ? SENSOR_FAULTED : SENSOR_ABSENT;
 
-                if (announced == 0U)
-                {
-                    announced = 1U;
-                    console_printf("VN200: ok");
-                }
-            }
-
-            /*
-             * Queue length = 1.
-             *
-             * Keep newest measurement.
-             */
-            if (vn200Queue != NULL)
+            if ((g_vn200_state != next) && (g_vn200_state != SENSOR_FAULTED))
             {
-                xQueueOverwrite(
-                    vn200Queue,
-                    &data
-                );
+                g_vn200_state = next;
+
+                /* Announce each transition once, not every cycle. */
+                console_printf("VN200: %s", sensor_state_str(next));
             }
         }
     }
