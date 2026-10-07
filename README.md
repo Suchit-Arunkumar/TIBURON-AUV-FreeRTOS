@@ -340,7 +340,7 @@ Tasks run on PSP and handler bodies on MSP. A first exception from thread mode p
 | Pi link | PA9 / PA10 | USART1 AF7, DMA2 Stream2 + IDLE |
 | VN-200 | PC10 / PC11 | USART3 AF7, DMA1 Stream1 + IDLE |
 | DVL | PA0 / PA1 | UART4 AF8, DMA1 Stream2 + IDLE |
-| Bar30 (MS5837) | PB8 / PB9 | I²C1 AF4, open-drain, 100 kHz |
+| Bar30 (MS5837) | PB8 / PB9 | I²C1 AF4, open-drain, 400 kHz |
 | SPI bus | PB13 / PB14 / PB15 | SPI2 AF5 |
 | SD_CS | PC4 | GPIO out, idle high |
 | OLED_CS | PC5 | GPIO out, idle high |

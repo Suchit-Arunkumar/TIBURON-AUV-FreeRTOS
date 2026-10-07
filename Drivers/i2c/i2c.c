@@ -11,7 +11,7 @@
 /*
  * Wait strategy: spin briefly, then yield.
  *
- * A single I2C phase at 100 kHz takes ~90 us. Spinning for that is
+ * A single I2C byte at 400 kHz takes ~23 us. Spinning for that is
  * cheaper than a context switch, so the FAST PATH is a bounded spin of
  * I2C_SPIN_US - a healthy transfer never leaves it and pays nothing.
  *
@@ -32,8 +32,8 @@
  * the scheduler; vTaskDelay() there would have no scheduler to return
  * from.
  */
-#define I2C_SPIN_US       250UL    /* fast path: ~2.7 byte times   */
-#define I2C_TIMEOUT_US   2500UL    /* total budget: ~28 byte times */
+#define I2C_SPIN_US       250UL    /* fast path: ~10 byte times    */
+#define I2C_TIMEOUT_US   2500UL    /* total budget: ~100 byte times */
 
 const char *i2c_status_str(I2C_Status s)
 {
@@ -175,11 +175,13 @@ void i2c1_init(void)
     // 9. set CR2 with APB1 frequency in MHz (45)
 	I2C1->CR2 = APB1CLK_MHZ;
 
-    // 10. set CCR = 225 for 100kHz standard mode
-	I2C1->CCR = 225 ;
+    // 10. 400 kHz fast mode, DUTY = 0: SCL high = CCR, low = 2 x CCR
+    //     periods of the 45 MHz APB1 clock, so 45 MHz / (3 x 38) = 395 kHz.
+	I2C1->CCR = I2C_CCR_FS | 38U;
 
-    // 11. set TRISE = 46
-	I2C1->TRISE = 46;
+    // 11. TRISE = max rise time / APB1 period + 1. Fast mode allows
+    //     300 ns: 300 ns x 45 MHz = 13.5, + 1 = 14.
+	I2C1->TRISE = 14U;
 
     // 12. enable I2C1 via PE bit in CR1
 	I2C1->CR1 |= I2C_CR1_PE;
@@ -219,7 +221,7 @@ void i2c1_bus_recover(void)
     i2c1_init();
 }
 
-I2C_Status i2c_write(uint8_t addr, uint8_t *data, uint8_t len)
+I2C_Status i2c_write(uint8_t addr, const uint8_t *data, uint16_t len)
 {
     // 1. generate START condition
 	I2C1->CR1 |= I2C_CR1_START;
@@ -247,7 +249,7 @@ I2C_Status i2c_write(uint8_t addr, uint8_t *data, uint8_t len)
 	//    a. wait for TXE flag
 	//    b. write byte to DR
 
-	for(int i = 0; i < len; i++){
+	for(uint16_t i = 0; i < len; i++){
 
 		if (!wait_flag(&I2C1->SR1, I2C_SR1_TXE))
 		{
@@ -276,7 +278,7 @@ I2C_Status i2c_write(uint8_t addr, uint8_t *data, uint8_t len)
 	return I2C_OK;
 }
 
-I2C_Status i2c_read(uint8_t addr, uint8_t *buf, uint8_t len)
+I2C_Status i2c_read_legacy(uint8_t addr, uint8_t *buf, uint16_t len)
 {
     // 1. generate START condition
 	I2C1->CR1 |= I2C_CR1_ACK;
@@ -306,8 +308,8 @@ I2C_Status i2c_read(uint8_t addr, uint8_t *buf, uint8_t len)
     //    a. if this is the last byte, disable ACK and generate STOP
     //    b. wait for RXNE flag in SR1
     //    c. read byte from DR into buf[i]
-	for(int i = 0; i < len; i++){
-	    if(i == (len - 1)){
+	for(uint16_t i = 0; i < len; i++){
+	    if(i == (len - 1U)){
 	        I2C1->CR1 &= ~I2C_CR1_ACK;
 	        I2C1->CR1 |= I2C_CR1_STOP;
 	    }
@@ -323,16 +325,17 @@ I2C_Status i2c_read(uint8_t addr, uint8_t *buf, uint8_t len)
 
 
 /*
- * i2c_read_rm() - master receiver per RM0390 section 24.3.3 ("Closing the
+ * i2c_read() - master receiver per RM0390 section 24.3.3 ("Closing the
  * communication"), polling method.
  *
- * Why i2c_read() above is not enough under an RTOS. It sets ACK before
+ * Why i2c_read_legacy() above is not enough under an RTOS. It sets ACK before
  * START and clears it, with STOP, only when it reaches the last byte. The
  * peripheral decides ACK/NACK for a byte at that byte's ninth clock, so the
  * clear has to land before the last byte finishes shifting in: one byte time,
- * about 90 us at 100 kHz. bar30_task runs at priority 4, and comms_task
- * (priority 5) busy-waits ~5.4 ms on every telemetry frame. If the task is
- * preempted while waiting for byte N-2, byte N-1 is ACKed, the slave sends
+ * about 23 us at 400 kHz. Any higher-priority task or interrupt that runs
+ * for longer than that at the wrong moment loses the race (on the bench it
+ * was comms_task's old 5.4 ms busy-wait on every telemetry frame). If the
+ * task is preempted while waiting for byte N-2, byte N-1 is ACKed, the slave sends
  * an extra byte, and it is left in DR with RXNE set, where the next read
  * returns it as its first byte. Nothing reports an error.
  *
@@ -347,7 +350,7 @@ static I2C_Status rm_fail(I2C_Status st)
 	return i2c_fail(st);
 }
 
-I2C_Status i2c_read_rm(uint8_t addr, uint8_t *buf, uint8_t len)
+I2C_Status i2c_read(uint8_t addr, uint8_t *buf, uint16_t len)
 {
     UBaseType_t m;
 
@@ -423,8 +426,8 @@ I2C_Status i2c_read_rm(uint8_t addr, uint8_t *buf, uint8_t len)
     (void)I2C1->SR1;
     (void)I2C1->SR2;
 
-    uint8_t i = 0;
-    while ((uint8_t)(len - i) > 3U)
+    uint16_t i = 0;
+    while ((uint16_t)(len - i) > 3U)
     {
         if (!wait_flag(&I2C1->SR1, I2C_SR1_RXNE))
         {

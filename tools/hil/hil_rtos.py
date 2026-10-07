@@ -589,13 +589,13 @@ def test_mpu(c: Console, ctx: Ctx, rounds: int) -> Result:
                f"14-byte read {t['t14'][0]}..{t['t14'][1]} us")
         t["bad"] = bad
     r.ok(results["rm0390"]["bad"] == 0 and results["rm0390"]["stale"] == 0,
-         f"i2c_read_rm(): 0 errors expected, got {results['rm0390']['bad']} errors, {results['rm0390']['stale']} stale bytes")
+         f"i2c_read() (RM0390): 0 errors expected, got {results['rm0390']['bad']} errors, {results['rm0390']['stale']} stale bytes")
     leg = results["legacy"]
     if leg["bad"] or leg["stale"]:
-        r.note(f"i2c_read() (current driver) failed {leg['bad']} reads and left {leg['stale']} stale bytes "
+        r.note(f"i2c_read_legacy() failed {leg['bad']} reads and left {leg['stale']} stale bytes "
                "under the same load: the RM0390 sequence is needed")
     else:
-        r.note("i2c_read() (current driver) showed no errors in this run")
+        r.note("i2c_read_legacy() showed no errors in this run")
     lo = results["rm0390"]["t14"][0]
     r.note(f"14-byte burst floor {lo} us vs ~1.55 ms computed for 100 kHz: confirms the I2C clock, CCR = 225")
     return r
