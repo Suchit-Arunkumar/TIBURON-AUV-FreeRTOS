@@ -23,7 +23,6 @@ static volatile uint16_t uart3_rx_tail = 0;
 /* Bytes lost because the ring was full. ISR writes, any task reads. */
 static volatile uint32_t uart3_rx_dropped_count = 0;
 
-TaskHandle_t vn200TaskHandle = NULL;
 
 
 //===========================================================================================================================
@@ -284,11 +283,11 @@ static void uart3_dma_drain(void)
 
     last_dma_pos = current_pos;
 
-    if ((moved != 0U) && (vn200TaskHandle != NULL))
+    if ((moved != 0U) && (imuTaskHandle != NULL))
     {
         BaseType_t woken = pdFALSE;
 
-        xTaskNotifyFromISR(vn200TaskHandle, (1UL << 0), eSetBits, &woken);
+        xTaskNotifyFromISR(imuTaskHandle, (1UL << 0), eSetBits, &woken);
         portYIELD_FROM_ISR(woken);
     }
 }
