@@ -631,7 +631,14 @@ void control_task(void *argument)
 
 	    CommandPayload cmd;
 
-	    if (xQueueReceive(commandQueue, &cmd, 0) == pdPASS)
+	    /*
+	     * Drain the queue, oldest first, so the setpoint this tick acts on
+	     * is the newest one. Taking one per tick meant that a Pi sending
+	     * faster than 50 Hz filled the queue and the vehicle ran up to four
+	     * commands (80 ms) behind. Every packet still goes through
+	     * target_update, so each one counts towards failsafe recovery.
+	     */
+	    while (xQueueReceive(commandQueue, &cmd, 0) == pdPASS)
 	    {
 	        float new_pose[6] = {
 	            cmd.current_x,

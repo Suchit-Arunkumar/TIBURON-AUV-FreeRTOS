@@ -16,7 +16,7 @@ QueueHandle_t commandQueue = NULL;
  * This was the one silent-loss path left in the Phase 11 queue analysis:
  * every other drop site had a counter, so a full commandQueue was the
  * only way to lose data with no diagnostic. Non-zero here means
- * control_task is not draining - it should consume one per 20 ms tick,
+ * control_task is not draining - it empties the queue every 20 ms tick,
  * so a depth-4 queue only fills if the control loop has stalled.
  *
  * Written by comms_task, read by dummy_task's health report.
@@ -79,10 +79,10 @@ void comms_task(void *argument)
                 bench_cmd_parsed(&cmd);
 
                 /*
-                 * Short bounded wait, then drop and count. Blocking
-                 * longer would back up the RX path behind a stalled
-                 * control loop, and the newest command is always the one
-                 * worth having.
+                 * Short bounded wait, then drop and count. The queue is
+                 * only full if control_task has stopped draining it, and
+                 * blocking longer would just back up the RX path behind
+                 * a stalled control loop.
                  */
                 if (xQueueSend(
                         commandQueue,
