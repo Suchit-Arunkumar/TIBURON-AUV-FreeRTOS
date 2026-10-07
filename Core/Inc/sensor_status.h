@@ -10,10 +10,10 @@
  * the Wayfinder DVL and the Bar30 all live on the vehicle. Before this,
  * that produced two different silent failures:
  *
- *   - vn200_task and dvl_task blocked on ulTaskNotifyTake(portMAX_DELAY),
+ *   - the VN-200 and DVL tasks blocked on ulTaskNotifyTake(portMAX_DELAY),
  *     so with no UART traffic they simply never ran again. Harmless in
  *     itself, but indistinguishable from a task that had crashed.
- *   - bar30_task called into an I2C driver whose every wait was
+ *   - the Bar30 task called into an I2C driver whose every wait was
  *     unbounded, so with no device on the bus it spun forever at
  *     priority 4, permanently starving logging, the SPI owner and the
  *     console.
@@ -43,7 +43,9 @@ const char *sensor_state_str(SensorState s);
  * harmless for a status display.
  */
 extern volatile SensorState g_vn200_state;
+extern volatile SensorState g_bno085_state;
 extern volatile SensorState g_dvl_state;
 extern volatile SensorState g_bar30_state;
+extern volatile SensorState g_adc_depth_state;
 
 #endif /* SENSOR_STATUS_H */

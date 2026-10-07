@@ -8,7 +8,14 @@ static uint8_t dma3_rx_buf[UART3_DMA_BUF_SIZE];
 
 static uint16_t last_dma_pos = 0;
 
-static uint8_t uart3_rx_buf[UART3_DMA_BUF_SIZE];
+/*
+ * Software ring between the ISR and the IMU task. Bigger than the DMA
+ * buffer on purpose: opening the BNO085 blocks the IMU task for up to
+ * ~0.5 s (sensor reboot plus waiting for its start-up messages), and the
+ * VN-200 keeps sending 4.2 kB/s meanwhile. 4096 bytes holds about a
+ * second of it, so nothing is lost while the other sensor starts.
+ */
+static uint8_t uart3_rx_buf[UART3_RX_RING_SIZE];
 
 static volatile uint16_t uart3_rx_head = 0;
 static volatile uint16_t uart3_rx_tail = 0;
@@ -16,7 +23,6 @@ static volatile uint16_t uart3_rx_tail = 0;
 /* Bytes lost because the ring was full. ISR writes, any task reads. */
 static volatile uint32_t uart3_rx_dropped_count = 0;
 
-TaskHandle_t vn200TaskHandle = NULL;
 
 
 //===========================================================================================================================
@@ -25,7 +31,7 @@ static void uart3_rx_store(const uint8_t *data, uint16_t length)
 	for(uint16_t i = 0; i < length; i++)
 	{
 		uint16_t next_head =
-			(uint16_t)((uart3_rx_head + 1U) % UART3_DMA_BUF_SIZE);
+			(uint16_t)((uart3_rx_head + 1U) % UART3_RX_RING_SIZE);
 
 		/*
 		 * Buffer full.
@@ -277,11 +283,11 @@ static void uart3_dma_drain(void)
 
     last_dma_pos = current_pos;
 
-    if ((moved != 0U) && (vn200TaskHandle != NULL))
+    if ((moved != 0U) && (imuTaskHandle != NULL))
     {
         BaseType_t woken = pdFALSE;
 
-        xTaskNotifyFromISR(vn200TaskHandle, (1UL << 0), eSetBits, &woken);
+        xTaskNotifyFromISR(imuTaskHandle, (1UL << 0), eSetBits, &woken);
         portYIELD_FROM_ISR(woken);
     }
 }
@@ -342,7 +348,7 @@ uint16_t uart3_read(uint8_t *out, uint16_t max_len)
 
 		uart3_rx_tail =
 			(uint16_t)((uart3_rx_tail + 1U) %
-					   UART3_DMA_BUF_SIZE);
+					   UART3_RX_RING_SIZE);
 	}
 
 	return count;

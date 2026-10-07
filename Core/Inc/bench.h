@@ -43,7 +43,7 @@ void bench_dummy_first_run(void);          /* paints the MSP */
 bool bench_console_key(char c);            /* true if the key was a bench key */
 void bench_print_help(void);
 
-/* bar30_task: the I2C bus owner runs bench I2C work in its own context. */
+/* depth_task: runs queued bench I2C work between its own transfers. */
 void bench_i2c_service(void);
 
 #else  /* !BENCH_HIL */

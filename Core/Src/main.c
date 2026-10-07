@@ -35,11 +35,11 @@
 #include "fault_latch.h"
 
 #include "comms_task.h"
-#include "vn200_task.h"
+#include "imu_task.h"
 #include "vn200.h"
 #include "dvl_task.h"
 #include "dvl.h"
-#include "bar30_task.h"
+#include "depth_task.h"
 #include "logging_task.h"
 #include "spi_owner_task.h"
 #include "console.h"
@@ -56,7 +56,7 @@
  * task. control/comms/vn200/dvl already had handles for other reasons;
  * these are new, added specifically for the stack audit below.
  */
-static TaskHandle_t bar30TaskHandle    = NULL;
+static TaskHandle_t depthTaskHandle    = NULL;
 static TaskHandle_t spiOwnerTaskHandle = NULL;
 static TaskHandle_t loggingTaskHandle  = NULL;
 static TaskHandle_t dummyTaskHandle    = NULL;
@@ -107,9 +107,9 @@ static void print_stack_audit(void)
     {
         { "Control", controlTaskHandle,  256 },
         { "Comms",   commsTaskHandle,    256 },
-        { "VN200",   vn200TaskHandle,    256 },
+        { "IMU",     imuTaskHandle,      384 },
         { "DVL",     dvlTaskHandle,      256 },
-        { "Bar30",   bar30TaskHandle,    256 },
+        { "Depth",   depthTaskHandle,    384 },
         { "SPIOwner",spiOwnerTaskHandle, 256 },
         { "Logging", loggingTaskHandle,  256 },
         { "Dummy",   dummyTaskHandle,    384 },
@@ -157,10 +157,12 @@ static void print_health(void)
                    (unsigned long)control_log_drops());
     console_printf("con drops : %lu lines",
                    (unsigned long)console_dropped());
-    console_printf("sensors   : VN200=%s DVL=%s Bar30=%s",
+    console_printf("sensors   : VN200=%s BNO085=%s DVL=%s Bar30=%s ADC=%s",
                    sensor_state_str(g_vn200_state),
+                   sensor_state_str(g_bno085_state),
                    sensor_state_str(g_dvl_state),
-                   sensor_state_str(g_bar30_state));
+                   sensor_state_str(g_bar30_state),
+                   sensor_state_str(g_adc_depth_state));
     console_printf("link      : %s  armed=%d  recovery=%u/%u",
                    control_loop_in_failsafe() ? "FAILSAFE" : "ok",
                    control_loop_get_armed() ? 1 : 0,
@@ -680,12 +682,12 @@ int main(void)
         );
 
     /*
-     * VN-200 latest measurement queue.
+     * Latest IMU sample, from whichever IMU is active.
      */
-    vn200Queue =
+    imuQueue =
         xQueueCreate(
             1,
-            sizeof(VN200Data)
+            sizeof(ImuSample)
         );
 
 
@@ -695,12 +697,12 @@ int main(void)
 
 
     /*
-     * Bar30 latest depth queue.
+     * Latest depth sample, from whichever depth sensor is active.
      */
-    bar30Queue =
+    depthQueue =
         xQueueCreate(
             1,
-            sizeof(float)
+            sizeof(DepthSample)
         );
 
     /*
@@ -752,8 +754,8 @@ int main(void)
      */
     if (commandQueue == NULL ||
         dvlQueue == NULL ||
-        vn200Queue == NULL ||
-        bar30Queue == NULL ||
+        imuQueue == NULL ||
+        depthQueue == NULL ||
         logQueue == NULL ||
         spiRequestQueue == NULL ||
         consoleQueue == NULL ||
@@ -778,7 +780,7 @@ int main(void)
      *
      *   7  Control   50 Hz deadline; nothing may delay it
      *   5  Comms     command ingest and telemetry egress
-     *   4  VN200 / DVL / Bar30   sensor drivers, equal and interchangeable
+     *   4  IMU / DVL / Depth     sensor tasks, equal and interchangeable
      *   3  SPIOwner  sole owner of SPI2 (OLED + SD)
      *   2  Logging   batches records; posts blocks to the bus owner
      *   1  Dummy     heartbeat, stack audit, single stdio owner
@@ -791,9 +793,9 @@ int main(void)
      */
     create_task_checked(control_task, "Control Task", 256, 7, &controlTaskHandle);
     create_task_checked(comms_task,   "Comms Task",   256, 5, &commsTaskHandle);
-    create_task_checked(vn200_task,   "VN200 Task",   256, 4, &vn200TaskHandle);
+    create_task_checked(imu_task,     "IMU Task",     384, 4, &imuTaskHandle);
     create_task_checked(dvl_task,     "DVL Task",     256, 4, &dvlTaskHandle);
-    create_task_checked(bar30_task,   "Bar30 Task",   256, 4, &bar30TaskHandle);
+    create_task_checked(depth_task,   "Depth Task",   384, 4, &depthTaskHandle);
     create_task_checked(spi_owner_task, "SPI Owner",   256, 3, &spiOwnerTaskHandle);
     create_task_checked(logging_task, "Logging Task", 256, 2, &loggingTaskHandle);
     /*
@@ -807,9 +809,9 @@ int main(void)
 
     bench_register_task("Ctl",  controlTaskHandle);
     bench_register_task("Com",  commsTaskHandle);
-    bench_register_task("VN",   vn200TaskHandle);
+    bench_register_task("IMU",  imuTaskHandle);
     bench_register_task("DVL",  dvlTaskHandle);
-    bench_register_task("B30",  bar30TaskHandle);
+    bench_register_task("Dep",  depthTaskHandle);
     bench_register_task("SPI",  spiOwnerTaskHandle);
     bench_register_task("Log",  loggingTaskHandle);
     bench_register_task("Dum",  dummyTaskHandle);
@@ -822,7 +824,7 @@ int main(void)
      * that task's first iteration:
      *
      *     USART1 -> commsTaskHandle  -> uart1_irq_enable() in comms_task
-     *     USART3 -> vn200TaskHandle  -> uart3_irq_enable() in vn200_task
+     *     USART3 -> imuTaskHandle    -> uart3_irq_enable() in imu_task
      *     UART4  -> dvlTaskHandle    -> uart4_irq_enable() in dvl_task
      *
      * Enabling the lines here would fix the NULL-handle problem and leave

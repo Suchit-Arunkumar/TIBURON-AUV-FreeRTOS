@@ -38,10 +38,17 @@ static struct
  * The sh2_Hal_t functions: how the SH-2 library reaches the sensor.
  * ------------------------------------------------------------------------ */
 
-/* SHTP over I2C: a write of {length lo, length hi, channel, sequence,
+/*
+ * SHTP over I2C: a write of {length lo, length hi, channel, sequence,
  * command}. This one is a reset on the executable channel, the same packet
  * the Adafruit driver sends. It doubles as the probe for which address
- * the sensor answers on. */
+ * the sensor answers on.
+ *
+ * One try per address. With no sensor fitted each try is a quick address
+ * NACK, so probing costs well under a millisecond; the IMU task simply
+ * tries again a couple of seconds later (Adafruit retries five times with
+ * 30 ms pauses, which would hold the task for 300 ms every time).
+ */
 static int hal_open(sh2_Hal_t *self)
 {
     (void)self;
@@ -51,18 +58,13 @@ static int hal_open(sh2_Hal_t *self)
 
     for (unsigned a = 0; a < sizeof(addrs); a++)
     {
-        for (int attempt = 0; attempt < 5; attempt++)
+        if (i2c_write(addrs[a], soft_reset, sizeof(soft_reset)) == I2C_OK)
         {
-            if (i2c_write(addrs[a], soft_reset, sizeof(soft_reset)) == I2C_OK)
-            {
-                bno_addr = addrs[a];
+            bno_addr = addrs[a];
 
-                /* Time for the hub to reboot before it is talked to. */
-                vTaskDelay(pdMS_TO_TICKS(300));
-                return 0;
-            }
-
-            vTaskDelay(pdMS_TO_TICKS(30));
+            /* Time for the hub to reboot before it is talked to. */
+            vTaskDelay(pdMS_TO_TICKS(300));
+            return 0;
         }
     }
 

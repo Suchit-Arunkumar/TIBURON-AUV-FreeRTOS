@@ -6,7 +6,8 @@
 
 #include <stdint.h>
 
-#define UART3_DMA_BUF_SIZE 256
+#define UART3_DMA_BUF_SIZE  256
+#define UART3_RX_RING_SIZE 4096
 
 void uart3_init(void);
 
@@ -15,7 +16,8 @@ void uart3_init(void);
  * Copies them into out[].
  */
 uint16_t uart3_read(uint8_t *out, uint16_t max_len);
-extern TaskHandle_t vn200TaskHandle;
+/* The task woken when bytes arrive; defined in imu_task.c. */
+extern TaskHandle_t imuTaskHandle;
 
 /* Enable the NVIC line. Call from the consuming task's first
  * iteration, never from main - see the note in the .c file. */

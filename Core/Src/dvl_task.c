@@ -11,7 +11,7 @@
 #include "console.h"
 
 /*
- * Health is judged on good frames, not on bytes, the same as vn200_task.
+ * Health is judged on good frames, not on bytes, the same as imu_task.
  * A frame with no bottom lock still counts as good: the DVL is alive and
  * talking, it just cannot see the bottom (velocity_valid is false).
  *

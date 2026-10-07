@@ -593,7 +593,7 @@ static uint32_t msp_used(void)
 }
 
 /* ===========================================================================
- * MPU-6050 I2C stress (bar30_task context: it owns I2C1)
+ * MPU-6050 I2C stress (runs in depth_task, between Bar30 transfers)
  * ======================================================================== */
 #define MPU_ADDR        0x68U
 #define MPU_WHO_AM_I    0x75U

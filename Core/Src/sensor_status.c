@@ -1,8 +1,10 @@
 #include "sensor_status.h"
 
-volatile SensorState g_vn200_state = SENSOR_INIT;
+volatile SensorState g_vn200_state  = SENSOR_INIT;
+volatile SensorState g_bno085_state = SENSOR_INIT;
 volatile SensorState g_dvl_state   = SENSOR_INIT;
-volatile SensorState g_bar30_state = SENSOR_INIT;
+volatile SensorState g_bar30_state     = SENSOR_INIT;
+volatile SensorState g_adc_depth_state = SENSOR_INIT;
 
 const char *sensor_state_str(SensorState s)
 {

@@ -58,7 +58,7 @@ I2C_Status i2c_read_legacy(uint8_t addr, uint8_t *buf, uint16_t len);
 /*
  * Recover a bus left stuck by a device mid-transfer. Clears BUSY by
  * clocking SCL manually, then re-initialises the peripheral. Called by
- * bar30_task after a timeout rather than on every error.
+ * depth_task after repeated failures rather than on every error.
  */
 void       i2c1_bus_recover(void);
 
