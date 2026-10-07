@@ -47,52 +47,15 @@
 #include "bench.h"
 
 
-//===========================================================================================================================
-// Dummy task
-//===========================================================================================================================
-
-/*
- * P9 — task handles needed to call uxTaskGetStackHighWaterMark() on every
- * task. control/comms/vn200/dvl already had handles for other reasons;
- * these are new, added specifically for the stack audit below.
- */
 static TaskHandle_t depthTaskHandle    = NULL;
 static TaskHandle_t spiOwnerTaskHandle = NULL;
 static TaskHandle_t loggingTaskHandle  = NULL;
 static TaskHandle_t dummyTaskHandle    = NULL;
 
 /*
- * P9 stack audit.
- *
- * uxTaskGetStackHighWaterMark(handle) returns the SMALLEST amount of free
- * stack a task has ever had since it started, in words - not the current
- * free amount. It is a watermark, not a live gauge: a task that touched
- * 90% of its stack once, briefly, during startup reports that number
- * forever after.
- *
- * ---------------------------------------------------------------------
- * KNOWN BLIND SPOT - the numbers this prints are a LOWER BOUND on usage,
- * not a complete picture.
- *
- * A high-water mark only records paths that actually executed. Several
- * of the deepest paths in this firmware do not run in a quiet bench
- * session, so their stack cost will not appear here:
- *
- *   - console_printf() formats on the CALLER's stack: an 80-byte
- *     ConsoleLine plus vsnprintf's own frame, on top of whatever that
- *     task was already using. Most tasks only call it on an error path.
- *     spi_owner_task's SD-error branch is the clearest example - it
- *     never fires unless a write actually fails.
- *   - control_task's failsafe branch and the flush-on-disarm path need
- *     a link loss or a disarm to be exercised.
- *   - comms_task's TX branch needs a packet to send.
- *   - The sensor tasks' parse paths need real VN-200/DVL traffic, which
- *     needs hardware that is not attached.
- *
- * Read the marks as "at least this much was used", and do not trim a
- * stack on the strength of a run that never entered these branches. See
- * the P9 notes in the README for what would justify trimming.
- * ---------------------------------------------------------------------
+ * Stack high-water marks: the least free stack each task has ever had.
+ * Only paths that actually ran are counted, so treat these as a lower
+ * bound until the error paths have been exercised (the bench script does).
  */
 static void print_stack_audit(void)
 {
@@ -204,11 +167,8 @@ static void print_help(void)
 }
 
 
-/*
- * Why the last reset happened, from RCC_CSR (RM0390 6.3.21), then clear
- * the flags so the next boot reports only its own cause. A power-on sets
- * POR, PIN and BOR together; a watchdog reset sets IWDG and PIN.
- */
+/* Why the last reset happened (RCC_CSR), then clear the flags so the next
+ * boot reports only its own cause. */
 static void reset_cause_report(void)
 {
     uint32_t csr = RCC->CSR;
@@ -225,26 +185,15 @@ static void reset_cause_report(void)
     RCC->CSR |= RCC_CSR_RMVF;
 }
 
+/*
+ * The only task that prints. Others call console_printf(), which formats
+ * on their own stack and queues the line here, so printf never needs to be
+ * reentrant. The 50 ms receive timeout doubles as the heartbeat tick.
+ */
 static void dummy_task(void *argument)
 {
     (void)argument;
 
-    /*
-     * THE SINGLE STDIO OWNER.
-     *
-     * configUSE_NEWLIB_REENTRANT is 0, so all nine tasks share one
-     * struct _reent and one stdout FILE. Rather than pay ~96 bytes of
-     * _reent per TCB to make printf reentrant, every other task calls
-     * console_printf(), which formats into its own stack and posts the
-     * bytes to consoleQueue. This task is the only one that performs
-     * output, and it does so with uart2_write_str() - so after the
-     * scheduler starts, stdout is never touched at all.
-     *
-     * The queue receive timeout doubles as the heartbeat tick, so no
-     * second wake source is needed. Heartbeat phase is tracked against
-     * xTaskGetTickCount rather than the timeout firing, so console
-     * traffic cannot skew the blink rate.
-     */
     ConsoleLine line;
 
     console_set_owner();
@@ -253,7 +202,7 @@ static void dummy_task(void *argument)
     TickType_t last_blink = xTaskGetTickCount();
     uint8_t    blink_phase = 0;
 
-    /* Let every task run through a few normal cycles before reading HWM. */
+    /* Let every task run a few cycles before the first report. */
     TickType_t audit_at = xTaskGetTickCount() + pdMS_TO_TICKS(5000);
     uint8_t    audit_done = 0;
 
@@ -265,11 +214,7 @@ static void dummy_task(void *argument)
             uart2_write_str("\r\n");
         }
 
-        /*
-         * On-demand reports. The operator types a key on the VCP;
-         * USART2_IRQHandler latches it and this poll picks it up on the
-         * next 50 ms wake.
-         */
+        /* Key typed on the console, latched by USART2_IRQHandler. */
         char c = console_take_command();
 
         switch (c)
@@ -295,11 +240,6 @@ static void dummy_task(void *argument)
 
         TickType_t now = xTaskGetTickCount();
 
-        /*
-         * One automatic report a few seconds after boot, so the numbers
-         * exist even if nobody is watching the console. After that it is
-         * on request only - see the blind-spot note on print_stack_audit.
-         */
         if ((audit_done == 0U) && ((int32_t)(now - audit_at) >= 0))
         {
             audit_done = 1U;
@@ -309,24 +249,11 @@ static void dummy_task(void *argument)
         }
 
         /*
-         * Heartbeat - three distinguishable states, readable across the
-         * room with no console at all.
-         *
-         *   steady 1 Hz      clock OK from HSE, watchdog ARMED. Nominal.
-         *   double-pulse     clock fell back to the HSI PLL. Still
-         *                    180 MHz, but HSI is only ~1% accurate at
-         *                    room temperature and worse across range,
-         *                    which can corrupt 115200 framing - so the
-         *                    console that would have reported it may be
-         *                    unreadable. Highest severity, wins.
-         *   short blip       watchdog NOT compiled in. This is the
-         *                    default bench build, and a build with no
-         *                    watchdog must never be mistakable for one
-         *                    with it: a hung control loop will not reset
-         *                    the board or stop the thrusters.
-         *
-         * A fatal clock status never reaches here - main halts in
-         * clock_fault_blink_forever() before the scheduler starts.
+         * Heartbeat, readable without a console:
+         *   steady 1 Hz   all good
+         *   double pulse  running on the HSI fallback clock (UART timing
+         *                 may be off, so the console may be garbled)
+         *   short blip    no watchdog in this build
          */
         {
             static const TickType_t pat_degraded[4] = {  80,  80,  80, 760 };
@@ -357,7 +284,6 @@ static void dummy_task(void *argument)
 
             if (pattern == NULL)
             {
-                /* Nominal: symmetric 1 Hz. */
                 if ((now - last_blink) >= pdMS_TO_TICKS(500))
                 {
                     last_blink = now;
@@ -386,14 +312,8 @@ static void dummy_task(void *argument)
 }
 
 
-//===========================================================================================================================
-// FreeRTOS stack overflow hook
-//===========================================================================================================================
-/*
- * Both hooks now latch into .noinit and halt, instead of blinking a LED
- * that told you nothing about which task died or why. The task name goes
- * into the latch detail field, so a warm reset prints it.
- */
+/* Both FreeRTOS hooks save the cause in the fault latch and halt; the
+ * next boot prints it. */
 void vApplicationStackOverflowHook(
     TaskHandle_t xTask,
     char *pcTaskName
@@ -410,10 +330,6 @@ void vApplicationStackOverflowHook(
     );
 }
 
-
-//===========================================================================================================================
-// FreeRTOS malloc failure hook
-//===========================================================================================================================
 void vApplicationMallocFailedHook(void)
 {
     fault_latch_fail(
@@ -426,19 +342,8 @@ void vApplicationMallocFailedHook(void)
 }
 
 
-//===========================================================================================================================
-// Checked task creation
-//===========================================================================================================================
-/*
- * xTaskCreate returns errCOULD_NOT_ALLOCATE_REQUIRED_MEMORY when the
- * heap is exhausted. Every call used to discard that, so a heap that
- * ran out midway through init produced a board that started the
- * scheduler with tasks silently missing — the control loop simply
- * never running, with nothing to indicate why.
- *
- * Latch the task name and stop. This runs before the scheduler, so a
- * halt here is safe.
- */
+/* A task that fails to create (heap exhausted) stops the boot with its
+ * name saved, instead of starting the scheduler without it. */
 static void create_task_checked(
     TaskFunction_t fn,
     const char *name,
@@ -471,172 +376,68 @@ static void create_task_checked(
 }
 
 
-//===========================================================================================================================
-// MAIN
-//===========================================================================================================================
 int main(void)
 {
-    /*
-     * 1. Configure system clock.
-     *    180 MHz PLL.
-     */
+    /* 180 MHz from the PLL. */
     system_clock_init();
 
     /*
-     * A fatal clock status means the core is on the raw 16 MHz HSI. Every
-     * UART divisor assumes a 45 MHz APB1, so the console would emit
-     * garbage, and configCPU_CLOCK_HZ is a 180 MHz literal, so SysTick
-     * would be programmed 11.25x fast. Neither the console nor the
-     * scheduler can be trusted; blink the status code on LD2 forever and
-     * go no further. This is also the invariant that lets
-     * configCPU_CLOCK_HZ be a literal at all.
+     * Fatal means the PLL never came up and the core is on the raw 16 MHz
+     * HSI. Every UART divisor and the SysTick setting assume 180 MHz, so
+     * nothing can be trusted: blink the error code and stop.
      */
     if (clock_status_is_fatal(g_clock_status))
     {
         clock_fault_blink_forever(g_clock_status);
     }
 
-
-    /*
-     * 2. NVIC priority grouping: 4 bits of preemption, 0 of subpriority.
-     *
-     * Before ANY NVIC_SetPriority call, so every priority written later
-     * is interpreted the way it was meant. PRIGROUP does not alter stored
-     * IPR bytes, only how the core splits them, but setting it first
-     * removes the question entirely. All-preemption is what FreeRTOS
-     * expects.
-     */
+    /* All 4 priority bits for preemption, none for sub-priority, as
+     * FreeRTOS expects. Set before any NVIC_SetPriority. */
     SCB->AIRCR =
         (0x5FAUL << SCB_AIRCR_VECTKEY_Pos) |
         (3UL << SCB_AIRCR_PRIGROUP_Pos);
 
-    /*
-     * Freeze the IWDG counter whenever the debugger halts the core.
-     * Unconditional, deliberately NOT behind ENABLE_IWDG: the IWDG cannot
-     * be stopped once started and does not halt with the core, so without
-     * this every breakpoint becomes a reset a second later. No effect on
-     * a free-running board, and a conditional version would be missing
-     * from exactly the build being debugged.
-     */
+    /* The IWDG keeps counting when a debugger halts the core; without
+     * this every breakpoint would reset the board. */
     iwdg_freeze_on_halt();
 
+    gpio_init(GPIOA, 5);    /* LD2 heartbeat */
 
-    /*
-     * 3. Initialize the LD2 heartbeat LED on PA5.
-     *
-     * PA5 is genuinely a GPIO again — the SPI bus moved to SPI2 on
-     * PB13/14/15, so nothing steals this pin later in init any more.
-     */
-    gpio_init(
-        GPIOA,
-        5
-    );
-
-
-    /*
-     * 4. Initialize UART2 for debug output.
-     */
-    uart2_init();
+    uart2_init();           /* console */
 
     printf("BOOT OK\r\n");
     printf("CLK: %s\r\n", system_clock_status_str(g_clock_status));
     reset_cause_report();
 
-
-    /*
-     * 5. Report and clear any fault latched by the previous run.
-     *
-     * Deliberately placed here: the VCP is up so this is printable, and
-     * nothing that could fault again has run yet. Prints nothing when no
-     * fault is latched.
-     */
+    /* Print and clear any fault saved by the previous run. */
     fault_latch_report();
 
-
-    /*
-     * 7. Initialize SPI2 (OLED + SD card).
-     *
-     * ADC and DAC init used to sit here. Both were dead code — nothing
-     * ever called adc_read() or dac_write() — and both claimed pins the
-     * final map assigns elsewhere: PA0 is now UART4_TX, and PA4 is
-     * reserved for a future ADC depth input and deliberately left
-     * unconfigured. Drivers deleted.
-     */
     spi2_init();
 
-
-    /*
-     * 8. Microsecond timebase.
-     *
-     * Placed before the SD card: sd_card.c bounds its PRE-SCHEDULER waits
-     * with micros(), because the tick-based path is only valid once the
-     * scheduler is running. Before that, xTickCount is 0 and never
-     * advances, so a tick deadline could never expire, and vTaskDelay()
-     * has no scheduler to return from.
-     */
+    /* Microsecond timer. Before the SD card, which uses it for timeouts
+     * while the scheduler (and so the tick) isn't running yet. */
     timer2_timebase_init();
 
-    /*
-     * 8a. BENCH_HIL: DWT cycle counter and PA15 input capture on TIM2_CH1.
-     *     Needs TIM2 running, so it sits right after the timebase.
-     */
     bench_init();
 
-
-    /*
-     * 9. Initialize SD card.
-     */
-    SD_Status sd_status =
-        sd_init();
+    SD_Status sd_status = sd_init();
 
     printf("SD: %s\r\n", sd_status_str(sd_status));
 
-
-    /*
-     * 10. Initialize I2C1, and create the mutex that lets more than
-     *     one task share it (checked with the queues below).
-     */
     i2c1_init();
     int i2c_lock_ok = i2c1_lock_create();
 
-
-    /*
-     * 11. Initialize OLED.
-     */
     oled_init();
-
-    oled_draw_string(
-        0,
-        0,
-        "ROV OK"
-    );
-
+    oled_draw_string(0, 0, "ROV OK");
     oled_update();
 
-
-    /*
-     * 12. Initialize all eight thruster PWM outputs.
-     *
-     * TIM3 CH1-4 + TIM8 CH1-4, every channel written to 1500 us before
-     * any output stage is enabled, counters running. The ESCs arm during
-     * the remainder of boot.
-     */
+    /* All eight outputs at 1500 us before they are enabled; the ESCs arm
+     * during the rest of boot. */
     pwm_init();
 
-
-    /*
-     * 13. Initialize control-loop state.
-     */
     control_loop_init();
 
-
-    /*
-     * 14. Start the independent watchdog.
-     *
-     * On in Release builds, off in Debug (see iwdg.h). Started last
-     * among the peripherals so the slower init steps above cannot trip
-     * it, and refreshed only by control_task.
-     */
+    /* Release builds only (iwdg.h). Started after the slow init steps. */
     iwdg_init();
 
     if (iwdg_is_enabled())
@@ -653,105 +454,18 @@ int main(void)
         printf("**********************************************\r\n");
     }
 
-
     /*
-     * B6: tim7_init() used to sit here.
-     *
-     * It has moved into control_task's first iteration. TIM7's ISR
-     * notifies controlTaskHandle and calls portYIELD_FROM_ISR, and
-     * neither is safe until the scheduler is running and that handle is
-     * populated — starting the timer here left a window where the 50 Hz
-     * interrupt could fire before either was true.
+     * Queues. Everything is allocated here, before the scheduler starts,
+     * so the heap can't run out later. Sizes and policies: README section 5.
      */
+    commandQueue    = xQueueCreate(4, sizeof(CommandPayload));
+    dvlQueue        = xQueueCreate(1, sizeof(DVLData));
+    imuQueue        = xQueueCreate(1, sizeof(ImuSample));
+    depthQueue      = xQueueCreate(1, sizeof(DepthSample));
+    logQueue        = xQueueCreate(8, sizeof(LogQueueItem));
+    spiRequestQueue = xQueueCreate(2, sizeof(SpiRequest));
+    consoleQueue    = xQueueCreate(CONSOLE_QUEUE_DEPTH, sizeof(ConsoleLine));
 
-
-    /*
-     * 15. Initialize queues.
-     */
-
-    commandQueue =
-        xQueueCreate(
-            4,
-            sizeof(CommandPayload)
-        );
-
-    dvlQueue =
-        xQueueCreate(
-            1,
-            sizeof(DVLData)
-        );
-
-    /*
-     * Latest IMU sample, from whichever IMU is active.
-     */
-    imuQueue =
-        xQueueCreate(
-            1,
-            sizeof(ImuSample)
-        );
-
-
-    /*
-     * DVL queue already exists.
-     */
-
-
-    /*
-     * Latest depth sample, from whichever depth sensor is active.
-     */
-    depthQueue =
-        xQueueCreate(
-            1,
-            sizeof(DepthSample)
-        );
-
-    /*
-     * Phase 8 — control_task -> logging_task.
-     *
-     * Depth 8 of LogQueueItem (44 B) = 352 B of storage. Records arrive
-     * at 5 Hz and logging_task drains them into its staging block almost
-     * instantly, only stalling when it posts a full block to the bus
-     * owner. Depth 8 covers 1.6 s of records, comfortably longer than the
-     * 250 ms worst-case SD program cycle that could hold it up.
-     */
-    logQueue =
-        xQueueCreate(
-            8,
-            sizeof(LogQueueItem)
-        );
-
-    /*
-     * Phase 8 — logging_task -> spi_owner_task.
-     *
-     * SpiRequest carries a whole 512-byte block by value, so each slot is
-     * ~520 B. Depth 2 = ~1.1 KB of heap. Blocks now leave only every
-     * ~2.4 s, so depth 2 is 4.8 s of absorption against a 250 ms
-     * worst-case write. Passing by value rather than by pointer costs one
-     * 512-byte memcpy per block - negligible at 0.4 Hz - and avoids any
-     * buffer-ownership handoff between the two tasks.
-     */
-    spiRequestQueue =
-        xQueueCreate(
-            2,
-            sizeof(SpiRequest)
-        );
-
-    /*
-     * Phase 8 — every task -> dummy_task, the single stdio owner.
-     */
-    consoleQueue =
-        xQueueCreate(
-            CONSOLE_QUEUE_DEPTH,
-            sizeof(ConsoleLine)
-        );
-
-    /*
-     * Verify queue creation.
-     *
-     * A NULL queue here would otherwise surface much later as a
-     * configASSERT deep inside the kernel on the first send. Latch the
-     * real cause and stop before the scheduler ever starts.
-     */
     if (commandQueue == NULL ||
         dvlQueue == NULL ||
         imuQueue == NULL ||
@@ -772,25 +486,7 @@ int main(void)
         );
     }
 
-
-    /*
-     * 16. Create the application tasks.
-     *
-     * Priority scheme (configMAX_PRIORITIES = 8, so 7 is the top):
-     *
-     *   7  Control   50 Hz deadline; nothing may delay it
-     *   5  Comms     command ingest and telemetry egress
-     *   4  IMU / DVL / Depth     sensor tasks, equal and interchangeable
-     *   3  SPIOwner  sole owner of SPI2 (OLED + SD)
-     *   2  Logging   batches records; posts blocks to the bus owner
-     *   1  Dummy     heartbeat, stack audit, single stdio owner
-     *   0  IDLE      kernel
-     *
-     * Priority 2 is no longer shared with anything: configUSE_TIMERS is
-     * now 0, so the timer service daemon that used to sit there is gone.
-     *
-     * Every creation is checked — see create_task_checked above.
-     */
+    /* Priorities: README section 4. Stack sizes are in words (4 bytes). */
     create_task_checked(control_task, "Control Task", 256, 7, &controlTaskHandle);
     create_task_checked(comms_task,   "Comms Task",   256, 5, &commsTaskHandle);
     create_task_checked(imu_task,     "IMU Task",     384, 4, &imuTaskHandle);
@@ -798,13 +494,7 @@ int main(void)
     create_task_checked(depth_task,   "Depth Task",   384, 4, &depthTaskHandle);
     create_task_checked(spi_owner_task, "SPI Owner",   256, 3, &spiOwnerTaskHandle);
     create_task_checked(logging_task, "Logging Task", 256, 2, &loggingTaskHandle);
-    /*
-     * Dummy is the stdio owner: every on-demand report formats in its context.
-     * Measured on hardware (2026-10-05, BENCH_HIL build, after every error path
-     * had run): 928 of 1024 B used, 96 B left. Static analysis had predicted
-     * 692 B; the difference is vsnprintf's real frame plus the bench reports.
-     * 384 words (1536 B) restores a margin above 500 B; heap had 9960 B free.
-     */
+    /* 1536 B: the bench measured 928 of 1024 B used, mostly vsnprintf. */
     create_task_checked(dummy_task,   "Dummy",        384, 1, &dummyTaskHandle);
 
     bench_register_task("Ctl",  controlTaskHandle);
@@ -816,35 +506,14 @@ int main(void)
     bench_register_task("Log",  loggingTaskHandle);
     bench_register_task("Dum",  dummyTaskHandle);
 
-
     /*
-     * LAST BEFORE THE SCHEDULER: CONFIGURE the interrupt-driven UARTs.
-     *
-     * Configure only. Each NVIC line is enabled by its CONSUMING TASK, on
-     * that task's first iteration:
-     *
-     *     USART1 -> commsTaskHandle  -> uart1_irq_enable() in comms_task
-     *     USART3 -> imuTaskHandle    -> uart3_irq_enable() in imu_task
-     *     UART4  -> dvlTaskHandle    -> uart4_irq_enable() in dvl_task
-     *
-     * Enabling the lines here would fix the NULL-handle problem and leave
-     * the harder half. Between the last xTaskCreate and
-     * vTaskStartScheduler(), pxCurrentTCB is populated but PSP is still
-     * ZERO - vPortSVCHandler sets it, and that only runs inside
-     * vPortStartFirstTask. An ISR reaching portYIELD_FROM_ISR in that
-     * window pends PendSV, whose context save does 'mrs r0, PSP' then
-     * 'stmdb r0!, {...}': a write through a null stack pointer. Same
-     * defect class as B6.
-     *
-     * Deferring each enable to its task closes that window completely.
-     * From vTaskStartScheduler() onward the kernel closes it too -
-     * tasks.c calls portDISABLE_INTERRUPTS() (BASEPRI = 0x50) before
-     * xPortStartScheduler(), masking every interrupt in this design
-     * (0x50 and 0x60) until vPortSVCHandler clears BASEPRI with a task
-     * genuinely running.
+     * Configure the UARTs, but leave their interrupts off: each task turns
+     * on its own when it first runs. An interrupt that woke a task before
+     * the scheduler started would write through a null stack pointer (PSP
+     * is still 0 until the first task starts).
      */
-    uart1_init();   /* Pi link      */
-    uart3_init();   /* VN-200       */
+    uart1_init();   /* Pi link       */
+    uart3_init();   /* VN-200        */
     uart4_init();   /* Wayfinder DVL */
 
     printf("UARTS CONFIGURED (IRQs enabled by their tasks)\r\n");
@@ -858,16 +527,9 @@ int main(void)
     printf("**********************************************\r\n");
 #endif
 
-
-    /*
-     * 17. Start FreeRTOS scheduler.
-     */
     vTaskStartScheduler();
 
-
-    /*
-     * Scheduler should never return.
-     */
+    /* Only reached if the scheduler could not start. */
     while (1)
     {
     }

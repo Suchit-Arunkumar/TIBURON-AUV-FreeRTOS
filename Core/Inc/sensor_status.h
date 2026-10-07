@@ -4,27 +4,9 @@
 #include <stdint.h>
 
 /*
- * Sensor presence.
- *
- * None of the three sensors is attached to the bench rig - the VN-200,
- * the Wayfinder DVL and the Bar30 all live on the vehicle. Before this,
- * that produced two different silent failures:
- *
- *   - the VN-200 and DVL tasks blocked on ulTaskNotifyTake(portMAX_DELAY),
- *     so with no UART traffic they simply never ran again. Harmless in
- *     itself, but indistinguishable from a task that had crashed.
- *   - the Bar30 task called into an I2C driver whose every wait was
- *     unbounded, so with no device on the bus it spun forever at
- *     priority 4, permanently starving logging, the SPI owner and the
- *     console.
- *
- * Each task now degrades to SENSOR_ABSENT: it keeps running, publishes
- * nothing, and says so once on the console.
- *
- * The distinction that matters for the bench is PRESENT vs ABSENT vs
- * FAULTED: absent means nothing ever answered, faulted means something
- * answered and then stopped. They call for different things - check the
- * wiring, versus check the sensor.
+ * Sensor state for the console. A missing sensor doesn't stop its task:
+ * it keeps running, publishes nothing, and reports ABSENT (never answered:
+ * check the wiring) or FAULTED (answered, then stopped: check the sensor).
  */
 typedef enum
 {
@@ -36,12 +18,8 @@ typedef enum
 
 const char *sensor_state_str(SensorState s);
 
-/*
- * Published by each sensor task for the console health report. Plain
- * enums written by one task and read by another: a torn read is not
- * possible for a single aligned word on Cortex-M, and a stale read is
- * harmless for a status display.
- */
+// Written by each sensor task, read by the health report. Single words,
+// so no lock needed.
 extern volatile SensorState g_vn200_state;
 extern volatile SensorState g_bno085_state;
 extern volatile SensorState g_dvl_state;

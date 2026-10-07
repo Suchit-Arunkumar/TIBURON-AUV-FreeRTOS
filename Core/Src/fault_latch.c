@@ -6,11 +6,8 @@
 
 #include <stdio.h>
 
-/*
- * .noinit — see the header. Deliberately not initialised: giving this an
- * initialiser would move it to .data and it would be overwritten from
- * flash on every reset, defeating the entire point.
- */
+// In .noinit so a reset doesn't clear it. No initialiser on purpose:
+// that would put it in .data, which is reloaded on every reset.
 FaultLatch g_fault_latch __attribute__((section(".noinit")));
 
 static void copy_detail(char *dst, const char *src)
@@ -29,9 +26,7 @@ static void copy_detail(char *dst, const char *src)
     dst[i] = '\0';
 }
 
-/* __FILE__ carries the full build path. Print only the last component —
- * the rest is noise on a 20-column terminal and identical for every
- * call site in the same tree. */
+// __FILE__ is the full build path; print just the file name.
 static const char *basename_of(const char *path)
 {
     const char *out = path;
@@ -71,22 +66,13 @@ void fault_latch_fail(FaultKind kind,
                       uint32_t pc,
                       const char *detail)
 {
-    /*
-     * Interrupts off first. Everything below writes the latch, and a
-     * preempting ISR that faults too would otherwise overwrite the
-     * first — and the first is the one that matters.
-     */
     __disable_irq();
 
-    /* Before anything else: a halted board must not keep the thrusters
-     * running at whatever they were last commanded. */
+    // a halted board must not leave the thrusters running
     pwm_fault_neutral();
 
-    /*
-     * First fault wins. A valid latch at this point can only be from this
-     * run (main reports and clears the previous run's one at boot), so a
-     * second fault raised while handling the first must not replace it.
-     */
+    // First fault wins. main clears the previous run's latch at boot, so a
+    // valid one here means a second fault while handling the first.
     if (!fault_latch_valid())
     {
         g_fault_latch.kind = (uint32_t)kind;
@@ -95,17 +81,14 @@ void fault_latch_fail(FaultKind kind,
         g_fault_latch.pc   = pc;
         copy_detail(g_fault_latch.detail, detail);
 
-        /* Magic written last, so a reset landing mid-update cannot leave
-         * a half-filled record that reads as valid. */
+        // magic last, so a half-written record never looks valid
         g_fault_latch.magic = FAULT_LATCH_MAGIC;
     }
 
     __DSB();
 
-    /*
-     * Break into the debugger, but only if one is enabled. Without one,
-     * BKPT is not a no-op on Cortex-M4: it escalates to a HardFault.
-     */
+    // Stop in the debugger if one is attached. Without one, BKPT would
+    // escalate to a HardFault.
     if (CoreDebug->DHCSR & CoreDebug_DHCSR_C_DEBUGEN_Msk)
     {
         __BKPT(0);
@@ -118,8 +101,7 @@ void fault_latch_fail(FaultKind kind,
 
 void fault_assert_failed(const char *file, uint32_t line)
 {
-    /* The caller's return address — i.e. an address inside whichever
-     * function evaluated the failing configASSERT. */
+    // an address inside the function whose configASSERT failed
     uint32_t pc = (uint32_t)__builtin_return_address(0);
 
     fault_latch_fail(FAULT_ASSERT, file, line, pc, "");

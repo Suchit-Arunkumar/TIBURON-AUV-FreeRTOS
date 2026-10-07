@@ -5,27 +5,15 @@
 #include <stdbool.h>
 
 /*
- * BNO085 on I2C1 (shared with the Bar30), no INT or RST pins.
+ * BNO085 on I2C1, no INT or RST pins, so it's polled. CEVA's SH-2 library
+ * (Middlewares/Third_Party/sh2) does the protocol; this file gives it
+ * open/read/write/time and turns its events into one reading.
  *
- * The protocol work (SHTP framing, SH-2 commands) is CEVA's library in
- * Middlewares/Third_Party/sh2. This file supplies the four functions that
- * library needs to reach the hardware (open, read, write, time) and turns
- * its sensor events into one reading.
+ * Reports at 50 Hz: game rotation vector (no magnetometer, which is
+ * unreliable near thruster motors; yaw starts at an arbitrary zero),
+ * calibrated gyro (rad/s), accelerometer (m/s^2, with gravity).
  *
- * Without the INT pin the sensor is polled: bno085_service() reads the
- * 4-byte SHTP header, and a whole packet only if the header says one is
- * waiting.
- *
- * Reports enabled, all at 50 Hz (same as the Pico setup minus the extras):
- *   game rotation vector   accel + gyro fusion, no magnetometer, which is
- *                          the right choice near thruster motors; yaw
- *                          starts at an arbitrary zero and drifts slowly
- *   calibrated gyroscope   rad/s
- *   accelerometer          m/s^2, includes gravity
- *
- * Axis convention: not yet compared against the VN-200 (which reports NED).
- * Do the tilt test from the hardware checklist before relying on signs
- * when switching between the two. UNTESTED on hardware.
+ * Axis signs not yet checked against the VN-200. UNTESTED on hardware.
  */
 
 typedef struct
@@ -45,19 +33,13 @@ typedef struct
     uint8_t accuracy;       /* 0 unreliable .. 3 high, from the report status */
 } Bno085Data;
 
-/*
- * Find the sensor (0x4A, then 0x4B), soft-reset it, open the SH-2
- * session and enable the reports. Blocks for roughly half a second, so
- * call it from the IMU task, never from the control path. Returns false
- * if no sensor answered or any step failed; safe to call again later.
- */
+/* Find the sensor (0x4A or 0x4B), reset it, enable the reports. Blocks
+ * for about half a second when a sensor answers. False if it failed;
+ * safe to call again. */
 bool bno085_open(void);
 
-/*
- * Poll the sensor and handle whatever it sent. Returns true when a new
- * orientation arrived; *out then has it, together with the latest gyro
- * and accel. If the sensor reset itself, the reports are re-enabled here.
- */
+/* Poll the sensor. True when a new orientation arrived (with the latest
+ * gyro and accel in *out). Re-enables the reports if the sensor reset. */
 bool bno085_service(Bno085Data *out);
 
 /* True while a session is open. */

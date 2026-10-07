@@ -2,31 +2,13 @@
 #include "system_init.h"
 
 /*
- * Eight ESC outputs across two timers.
- *
- * Previously pwm_set_us() ignored its channel argument and wrote CCR1
- * unconditionally, so all eight thrusters collapsed onto one output and
- * the last write of each control tick won. Audit finding B4.
- *
- *   ch 0..3  TIM3 CH1..CH4   PB4  PB5  PB0  PB1   AF2   (APB1)
- *   ch 4..7  TIM8 CH1..CH4   PC6  PC7  PC8  PC9   AF3   (APB2)
- *
- * The two prescalers are deliberately different. TIM3 hangs off APB1
- * whose timer clock is 90 MHz; TIM8 hangs off APB2 whose timer clock is
- * 180 MHz. Both must end up counting at 1 MHz, so:
- *
- *   TIM3  PSC = (90e6  / 1e6) - 1 =  89
- *   TIM8  PSC = (180e6 / 1e6) - 1 = 179
- *
- * Making them equal would run thrusters 5-8 at twice the intended frame
- * rate and half the intended pulse width.
- *
- * ARR = 19999 on both: 20000 counts at 1 MHz = 20 ms = 50 Hz, with 1 us
- * of resolution across the 1100-1900 us BlueRobotics Basic ESC range.
+ * Eight ESC outputs:
+ *   ch 0..3  TIM3 CH1..CH4   PB4  PB5  PB0  PB1   AF2
+ *   ch 4..7  TIM8 CH1..CH4   PC6  PC7  PC8  PC9   AF3
+ * Both count at 1 MHz (1 us per count) with a 20 ms period. TIM3's clock
+ * is 90 MHz and TIM8's is 180 MHz, so the prescalers differ.
  */
 
-/* Derived from the clock tree rather than hardcoded, so a clock change
- * is a compile-time consequence instead of a silent timing bug. */
 #define PWM_TICK_HZ        1000000U
 #define TIM3_PSC_VALUE     ((APB1_TIMCLK_HZ / PWM_TICK_HZ) - 1U)   /*  89 */
 #define TIM8_PSC_VALUE     ((APB2_TIMCLK_HZ / PWM_TICK_HZ) - 1U)   /* 179 */
@@ -46,14 +28,8 @@ static void tim3_gpio_init(void)
 {
     RCC->AHB1ENR |= RCC_AHB1ENR_GPIOBEN;
 
-    /*
-     * PB4 is NJTRST. It comes out of reset already in an alternate
-     * function state for the JTAG tap, so its MODER and AFR bits must be
-     * cleared explicitly rather than OR-ed onto — otherwise thruster 1
-     * never moves and nothing in the code looks wrong.
-     *
-     * SWD (PA13/PA14) is untouched, so debugging still works.
-     */
+    // PB4 boots as a JTAG pin (NJTRST): clear its bits, don't just OR,
+    // or thruster 1 never moves.
     GPIOB->MODER &= ~((3U << (2 * 4)) | (3U << (2 * 5)) |
                       (3U << (2 * 0)) | (3U << (2 * 1)));
     GPIOB->MODER |=  ((2U << (2 * 4)) | (2U << (2 * 5)) |
@@ -97,27 +73,20 @@ void pwm_init(void)
     tim3_gpio_init();
     tim8_gpio_init();
 
-    /* --- Time base ------------------------------------------------- */
     TIM3->PSC = TIM3_PSC_VALUE;
     TIM3->ARR = PWM_ARR_VALUE;
 
     TIM8->PSC = TIM8_PSC_VALUE;
     TIM8->ARR = PWM_ARR_VALUE;
 
-    /* --- Output compare: PWM mode 1 with preload on all 8 ----------- */
     TIM3->CCMR1 = OC_PWM1_LOW | OC_PWM1_HIGH;   /* CH1, CH2 */
     TIM3->CCMR2 = OC_PWM1_LOW | OC_PWM1_HIGH;   /* CH3, CH4 */
 
     TIM8->CCMR1 = OC_PWM1_LOW | OC_PWM1_HIGH;
     TIM8->CCMR2 = OC_PWM1_LOW | OC_PWM1_HIGH;
 
-    /*
-     * --- Neutral BEFORE any output stage is enabled -----------------
-     *
-     * CCRx resets to 0. Enabling CCxE with a CCR still at 0 presents a
-     * 0 us pulse to the ESC, which is not a valid frame and which some
-     * ESCs latch as a fault. Write 1500 first, always.
-     */
+    // 1500 us before the outputs are enabled: the compare registers reset
+    // to 0, and a 0 us pulse isn't a valid ESC frame.
     TIM3->CCR1 = PWM_US_NEUTRAL;
     TIM3->CCR2 = PWM_US_NEUTRAL;
     TIM3->CCR3 = PWM_US_NEUTRAL;
@@ -128,27 +97,19 @@ void pwm_init(void)
     TIM8->CCR3 = PWM_US_NEUTRAL;
     TIM8->CCR4 = PWM_US_NEUTRAL;
 
-    /* --- Enable the capture/compare outputs ------------------------- */
     TIM3->CCER = TIM_CCER_CC1E | TIM_CCER_CC2E |
                  TIM_CCER_CC3E | TIM_CCER_CC4E;
 
     TIM8->CCER = TIM_CCER_CC1E | TIM_CCER_CC2E |
                  TIM_CCER_CC3E | TIM_CCER_CC4E;
 
-    /*
-     * TIM8 is an advanced-control timer. Its outputs stay electrically
-     * disconnected until the main output enable is set, regardless of
-     * CCER. TIM3 is a general-purpose timer and has no equivalent bit.
-     * Forgetting this leaves thrusters 5-8 silently dead.
-     */
+    // TIM8 (advanced timer) outputs stay off until MOE is set.
     TIM8->BDTR |= TIM_BDTR_MOE;
 
-    /* --- Auto-reload preload, then start counting ------------------- */
     TIM3->CR1 |= TIM_CR1_ARPE;
     TIM8->CR1 |= TIM_CR1_ARPE;
 
-    /* Force the preloaded CCR and ARR values into their shadow
-     * registers so the very first frame is already 1500 us. */
+    // load the preloaded values now, so the first frame is already 1500 us
     TIM3->EGR = TIM_EGR_UG;
     TIM8->EGR = TIM_EGR_UG;
 
@@ -158,15 +119,13 @@ void pwm_init(void)
 
 void pwm_set_us(uint8_t channel, uint16_t us)
 {
-    /* Out-of-range channel is a caller bug, not something to paper over
-     * by writing a real output. Drop it. */
+    // bad channel: drop it rather than drive some other output
     if (channel >= PWM_CHANNELS)
     {
         return;
     }
 
-    /* Clamp into the ESC's usable band. A T200 will not see a command
-     * outside 1100-1900 us from this firmware under any code path. */
+    // nothing outside 1100-1900 us ever reaches an ESC
     if (us < PWM_US_MIN)
     {
         us = PWM_US_MIN;
@@ -200,12 +159,9 @@ void pwm_all_neutral(void)
 
 void pwm_fault_neutral(void)
 {
-    /*
-     * Deliberately no update event (EGR = UG) to apply this immediately.
-     * Restarting the counter in the middle of a high pulse stretches that
-     * pulse, which the ESC would read as a command for one frame. With
-     * preload on, the neutral value takes over cleanly at the next frame.
-     */
+    // No update event to apply it at once: restarting the counter
+    // mid-pulse would stretch that pulse into a one-frame command. It
+    // takes effect at the next frame.
     TIM3->CCR1 = PWM_US_NEUTRAL;
     TIM3->CCR2 = PWM_US_NEUTRAL;
     TIM3->CCR3 = PWM_US_NEUTRAL;

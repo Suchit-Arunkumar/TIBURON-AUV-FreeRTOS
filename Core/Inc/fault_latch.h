@@ -4,20 +4,11 @@
 #include <stdint.h>
 
 /*
- * Reset-surviving fault latch.
- *
- * The problem this solves: configASSERT, the stack-overflow hook and the
- * malloc-failed hook all used to end in a bare spin loop. When one fired
- * you got a dead board and no way to find out which check tripped or
- * where. This records that before halting, in a RAM struct the startup
- * code does not clear, so the answer survives the warm reset you
- * inevitably reach for next.
- *
- * The struct lives in .noinit, placed after _ebss in the linker script
- * so startup_stm32f446retx.s never zeroes it. It is therefore garbage on
- * a cold power-up, which is why every read is gated on the magic word.
- * A random cold-boot word matching FAULT_LATCH_MAGIC is a 1-in-2^32
- * event; the cost of it happening is one spurious boot message.
+ * Fault latch: on an assert, stack overflow, failed allocation or CPU
+ * fault, save what happened and where in RAM that survives a reset
+ * (.noinit, not zeroed at start-up), then halt. The next boot prints it.
+ * After a power cycle the RAM is random, so it only counts if the magic
+ * word matches.
  */
 
 #define FAULT_LATCH_MAGIC     0x54464B31UL   /* "TFK1" */

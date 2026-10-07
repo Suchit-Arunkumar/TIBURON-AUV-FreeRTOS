@@ -34,20 +34,12 @@ static struct
     float   ax, ay, az;
 } cache;
 
-/* ------------------------------------------------------------------------
- * The sh2_Hal_t functions: how the SH-2 library reaches the sensor.
- * ------------------------------------------------------------------------ */
+// The sh2_Hal_t functions: how the SH-2 library reaches the sensor.
 
 /*
- * SHTP over I2C: a write of {length lo, length hi, channel, sequence,
- * command}. This one is a reset on the executable channel, the same packet
- * the Adafruit driver sends. It doubles as the probe for which address
- * the sensor answers on.
- *
- * One try per address. With no sensor fitted each try is a quick address
- * NACK, so probing costs well under a millisecond; the IMU task simply
- * tries again a couple of seconds later (Adafruit retries five times with
- * 30 ms pauses, which would hold the task for 300 ms every time).
+ * Soft reset (SHTP: length lo, length hi, channel 1, seq, reset), the same
+ * packet Adafruit's driver sends. Also finds which address answers. One
+ * try each: with no sensor it's a quick NACK, and imu_task retries later.
  */
 static int hal_open(sh2_Hal_t *self)
 {
@@ -77,11 +69,9 @@ static void hal_close(sh2_Hal_t *self)
 }
 
 /*
- * Every SHTP packet starts with a 4-byte header whose first two bytes are
- * the packet length (bit 15 is a "continued" flag). Read just the header
- * first; if the length is zero there is nothing waiting. Otherwise read
- * the whole packet in one transfer: the sensor sends the header again,
- * then the payload, which is exactly what the library expects in pBuffer.
+ * Read the 4-byte SHTP header first: its first two bytes are the length
+ * (bit 15 is a continuation flag), 0 means nothing waiting. Then read the
+ * whole packet; the sensor repeats the header, which the library expects.
  */
 static int hal_read(sh2_Hal_t *self, uint8_t *pBuffer, unsigned len, uint32_t *t_us)
 {
@@ -138,27 +128,21 @@ static sh2_Hal_t hal =
     .getTimeUs = hal_time_us,
 };
 
-/* ------------------------------------------------------------------------
- * Callbacks. Both run inside sh2_service(), in the IMU task.
- * ------------------------------------------------------------------------ */
+// Callbacks; both run inside sh2_service(), in imu_task.
 
 static void on_async_event(void *cookie, sh2_AsyncEvent_t *event)
 {
     (void)cookie;
 
-    /* The hub rebooted (brown-out, ESD...). Its report settings are gone. */
+    // the sensor rebooted itself and forgot its report settings
     if (event->eventId == SH2_RESET)
     {
         reset_seen = true;
     }
 }
 
-/*
- * The library calls this once per event, and one SHTP packet can carry
- * several. Each report type is cached separately, the same fix as in the
- * Pico test sketch: a single shared slot keeps only the last event and
- * silently loses the rest.
- */
+// Called once per event, and one packet can carry several, so each
+// report type is cached separately (as in the Pico sketch).
 static void on_sensor_event(void *cookie, sh2_SensorEvent_t *event)
 {
     (void)cookie;
@@ -199,8 +183,6 @@ static void on_sensor_event(void *cookie, sh2_SensorEvent_t *event)
     }
 }
 
-/* ------------------------------------------------------------------------ */
-
 static bool enable_reports(void)
 {
     static const sh2_SensorId_t ids[] =
@@ -226,8 +208,7 @@ static bool enable_reports(void)
     return true;
 }
 
-/* Quaternion to yaw/pitch/roll, ZYX order, degrees. Same as the Pico
- * sketch. Pitch is clamped at +/-90 degrees, where yaw and roll couple. */
+// Quaternion to yaw/pitch/roll (ZYX), degrees, as in the Pico sketch.
 static void quat_to_euler(float w, float x, float y, float z, Bno085Data *out)
 {
     float sinp = 2.0f * (w * y - z * x);
@@ -242,9 +223,7 @@ static void quat_to_euler(float w, float x, float y, float z, Bno085Data *out)
 
 bool bno085_open(void)
 {
-    /* The library has a single session. Opening again on top of a live
-     * one fails every time, so always close first (the Pico sketch found
-     * the same). */
+    // one session only: opening on top of a live one always fails
     bno085_close();
 
     memset(&cache, 0, sizeof(cache));
@@ -263,8 +242,7 @@ bool bno085_open(void)
         return false;
     }
 
-    /* The reset we just caused is reported once at start-up; it is not a
-     * new reset. */
+    // that reset was ours, not a new one
     reset_seen = false;
     return true;
 }

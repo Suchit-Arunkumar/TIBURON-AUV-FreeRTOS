@@ -11,18 +11,9 @@
 #include <stdbool.h>
 
 /*
- * One task, two IMUs.
- *
- * Wake-ups come from two places:
- *   - the USART3 interrupt, whenever VN-200 bytes arrive (~100 Hz);
- *   - a 5 ms timeout, which is when the BNO085 gets polled. It has no
- *     INT pin wired, so polling is the only way to know it has data.
- *
- * Each pass: drain the VN-200 bytes, poll the BNO085, decide which one
- * is active, publish its newest reading to imuQueue if there is one.
- *
- * A sensor is OK while it produces good readings, ABSENT if it never has,
- * FAULTED if it did and then went silent for IMU_SILENT_MS.
+ * Wakes on VN-200 bytes (USART3 interrupt) or every 5 ms to poll the
+ * BNO085, which has no INT pin. Each pass: parse VN-200 bytes, poll the
+ * BNO085, pick the source, publish its newest reading.
  */
 #define IMU_POLL_MS          5U
 #define IMU_SILENT_MS        3000U
