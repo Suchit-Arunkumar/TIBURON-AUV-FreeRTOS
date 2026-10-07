@@ -7,34 +7,22 @@
 
 #include <string.h>
 
-/*
- * logging_task never touches SPI. It accumulates records into a staging
- * block and hands finished blocks to spi_owner_task, which is the only
- * task allowed near the bus. See spi_owner_task.h for why that is a bus
- * owner and not a mutex.
- */
+// Packs log records into 512-byte blocks and hands full blocks to
+// spi_owner_task, the only task that touches SPI.
 
-/*
- * Bounded wait when posting a finished block to the bus owner.
- *
- * A block now leaves roughly every 2.4 s and the owner needs at most
- * ~250 ms for a worst-case card, so 500 ms is generous. If the owner is
- * still busy past that, the block is dropped rather than backing this
- * task up indefinitely - dropping 12 records of telemetry is preferable
- * to stalling and losing the ones that follow.
- */
+// A block leaves every ~1.4 s and an SD write takes at most 250 ms, so if
+// the bus owner is still busy after 500 ms, drop the block rather than
+// stall and lose the records after it.
 #define SPI_POST_TIMEOUT_MS   500U
 
 QueueHandle_t logQueue = NULL;
 
-/* Staging block, static rather than on the stack: 512 bytes is four times
- * this task's entire stack allocation. */
+// static: 512 bytes is half this task's stack
 static uint8_t  staging[SPI_BLOCK_BYTES];
 static uint16_t staged_count = 0;
 static uint32_t block_seq    = 0;
 static uint32_t first_ts     = 0;
 
-/* Written by logging_task, read by dummy_task's health report. */
 static volatile uint32_t blocks_emitted   = 0;
 static volatile uint32_t records_staged   = 0;
 static volatile uint32_t spi_post_drops   = 0;
@@ -50,16 +38,13 @@ static void staging_reset(void)
     first_ts     = 0;
 }
 
-/*
- * Seal the staging block and hand it to the bus owner. A partial block is
- * perfectly valid - record_count says how many entries are real, and the
- * remainder is zero.
- */
+// Add the header and send the block. A partial block is fine:
+// record_count says how many records are real.
 static void staging_flush(void)
 {
     if (staged_count == 0U)
     {
-        return;   /* nothing to write; do not burn a block */
+        return;   /* nothing to write */
     }
 
     LogBlockHeader header;
@@ -72,11 +57,7 @@ static void staging_flush(void)
 
     memcpy(staging, &header, sizeof(header));
 
-    /*
-     * P9: static for the same reason as spi_owner_task's copy - a
-     * 520-byte stack local put this task at 84% of its allocation.
-     * staging_flush is only ever called from logging_task.
-     */
+    // static: 520 bytes, too big for the stack
     static SpiRequest req;
 
     req.type       = SPI_REQ_SD_BLOCK;
@@ -92,9 +73,8 @@ static void staging_flush(void)
     }
     else
     {
-        /* Bus owner wedged. Drop the block and keep going - but do not
-         * advance the sequence number, so a gap in seq on the card means
-         * exactly this and nothing else. */
+        // Drop it, but don't advance seq: on the card a gap in seq then
+        // means exactly this.
         spi_post_drops++;
     }
 
@@ -122,9 +102,7 @@ static void staging_add(const LogRecord *record)
     staged_count++;
     records_staged++;
 
-    /* Emit as soon as the block is full rather than waiting for the next
-     * record, so a vehicle that stops logging still leaves a complete
-     * final block on the card. */
+    // send as soon as it's full, not when the next record arrives
     if (staged_count >= LOG_RECORDS_PER_BLOCK)
     {
         staging_flush();
@@ -145,8 +123,7 @@ void logging_task(void *argument)
         {
             if (item.kind == LOG_ITEM_FLUSH)
             {
-                /* Disarm or failsafe: get whatever is staged onto the
-                 * card now. This is the data most worth having. */
+                // disarm or failsafe: write what we have now
                 staging_flush();
             }
             else

@@ -12,7 +12,7 @@
 #include "uart4.h"
 
 #include "spi.h"
-#include "oled.h"
+#include "ili9341.h"
 #include "sd_card.h"
 
 #include "timer_basic.h"
@@ -73,7 +73,7 @@ static void print_stack_audit(void)
         { "IMU",     imuTaskHandle,      384 },
         { "DVL",     dvlTaskHandle,      256 },
         { "Depth",   depthTaskHandle,    384 },
-        { "SPIOwner",spiOwnerTaskHandle, 256 },
+        { "SPIOwner",spiOwnerTaskHandle, 384 },
         { "Logging", loggingTaskHandle,  256 },
         { "Dummy",   dummyTaskHandle,    384 },
     };
@@ -424,12 +424,21 @@ int main(void)
 
     printf("SD: %s\r\n", sd_status_str(sd_status));
 
+    if (sd_status == SD_OK)
+    {
+        // continue after the previous run's log instead of overwriting it
+        uint32_t log_start = sd_logger_find_start();
+        sd_logger_init(log_start);
+        printf("SD: %s, log starts at block %lu\r\n",
+               sd_is_sdhc() ? "SDHC" : "SDSC", (unsigned long)log_start);
+    }
+
     i2c1_init();
     int i2c_lock_ok = i2c1_lock_create();
 
-    oled_init();
-    oled_draw_string(0, 0, "ROV OK");
-    oled_update();
+    ili9341_init();
+    ili9341_draw_text(0, 0, "TIBURON AUV", TFT_CYAN, TFT_BLACK);
+    ili9341_draw_text(0, 1, "booting", TFT_WHITE, TFT_BLACK);
 
     /* All eight outputs at 1500 us before they are enabled; the ESCs arm
      * during the rest of boot. */
@@ -492,7 +501,7 @@ int main(void)
     create_task_checked(imu_task,     "IMU Task",     384, 4, &imuTaskHandle);
     create_task_checked(dvl_task,     "DVL Task",     256, 4, &dvlTaskHandle);
     create_task_checked(depth_task,   "Depth Task",   384, 4, &depthTaskHandle);
-    create_task_checked(spi_owner_task, "SPI Owner",   256, 3, &spiOwnerTaskHandle);
+    create_task_checked(spi_owner_task, "SPI Owner",   384, 3, &spiOwnerTaskHandle);
     create_task_checked(logging_task, "Logging Task", 256, 2, &loggingTaskHandle);
     /* 1536 B: the bench measured 928 of 1024 B used, mostly vsnprintf. */
     create_task_checked(dummy_task,   "Dummy",        384, 1, &dummyTaskHandle);

@@ -49,7 +49,7 @@
 									<listOptionValue builtIn="false" value="../Drivers/dac"/>
 									<listOptionValue builtIn="false" value="../Drivers/adc"/>
 									<listOptionValue builtIn="false" value="../Devices/sd_card"/>
-									<listOptionValue builtIn="false" value="../Devices/oled"/>
+									<listOptionValue builtIn="false" value="../Devices/ili9341"/>
 									<listOptionValue builtIn="false" value="../Drivers/uart"/>
 									<listOptionValue builtIn="false" value="../Drivers/timer"/>
 									<listOptionValue builtIn="false" value="../Drivers/spi"/>
@@ -103,7 +103,7 @@
 								<listOptionValue builtIn="false" value="../Drivers/dac"/>
 								<listOptionValue builtIn="false" value="../Drivers/adc"/>
 								<listOptionValue builtIn="false" value="../Devices/sd_card"/>
-								<listOptionValue builtIn="false" value="../Devices/oled"/>
+								<listOptionValue builtIn="false" value="../Devices/ili9341"/>
 								<listOptionValue builtIn="false" value="../Drivers/uart"/>
 								<listOptionValue builtIn="false" value="../Drivers/timer"/>
 								<listOptionValue builtIn="false" value="../Drivers/spi"/>
@@ -136,7 +136,7 @@
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Core"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Devices/bar30"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Devices/dvl"/>
-						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Devices/oled"/>
+						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Devices/ili9341"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Devices/vn200"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Drivers"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Middlewares/FreeRTOS/Source"/>
@@ -195,7 +195,7 @@
 									<listOptionValue builtIn="false" value="../Drivers/dac"/>
 									<listOptionValue builtIn="false" value="../Drivers/adc"/>
 									<listOptionValue builtIn="false" value="../Devices/sd_card"/>
-									<listOptionValue builtIn="false" value="../Devices/oled"/>
+									<listOptionValue builtIn="false" value="../Devices/ili9341"/>
 									<listOptionValue builtIn="false" value="../Drivers/uart"/>
 									<listOptionValue builtIn="false" value="../Drivers/timer"/>
 									<listOptionValue builtIn="false" value="../Drivers/spi"/>
@@ -243,7 +243,7 @@
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Core"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Devices/bar30"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Devices/dvl"/>
-						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Devices/oled"/>
+						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Devices/ili9341"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Devices/vn200"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Drivers"/>
 						<entry flags="VALUE_WORKSPACE_PATH|RESOLVED" kind="sourcePath" name="Middlewares/FreeRTOS/Source"/>

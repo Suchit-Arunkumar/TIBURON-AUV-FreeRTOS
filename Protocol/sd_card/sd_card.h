@@ -2,6 +2,7 @@
 #define SD_CARD_H
 
 #include <stdint.h>
+#include <stdbool.h>
 
 /*
  * Distinct failure codes.
@@ -59,6 +60,10 @@ SD_Status sd_init(void);
 SD_Status sd_read_block(uint32_t block_addr, uint8_t *buf);
 
 SD_Status sd_write_block(uint32_t block_addr, const uint8_t *data);
+
+/* True for SDHC/SDXC (block addressing). Block numbers passed to the
+ * read/write functions are converted for older SDSC cards. */
+bool sd_is_sdhc(void);
 
 /*
  * Optional card-detect hook. Pass a function returning 1 when a card is

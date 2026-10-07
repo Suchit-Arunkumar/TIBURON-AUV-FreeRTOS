@@ -17,6 +17,10 @@
 #include "timer_basic.h"
 #include "iwdg.h"
 #include "bench.h"
+#include "imu_task.h"
+#include "depth_task.h"
+#include "dvl_task.h"
+#include "dvl.h"
 
 
 #define N_DOF           6
@@ -469,6 +473,54 @@ uint32_t control_log_drops(void)
     return log_drop_count;
 }
 
+#define LOG_STALE_MS   500U
+
+// Latest sensor readings into a log record. xQueuePeek with no wait: one
+// copy each, never blocks the control task.
+static void log_sensors(LogRecord *r)
+{
+    uint32_t now = (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
+
+    ImuSample   imu;
+    DepthSample depth;
+    DVLData     dvl;
+
+    r->imu_source     = 0U;
+    r->depth_source   = 0U;
+    r->dvl_valid      = 0U;
+    r->reserved       = 0U;
+    r->imu_yaw_deg    = 0.0f;
+    r->imu_pitch_deg  = 0.0f;
+    r->imu_roll_deg   = 0.0f;
+    r->sensor_depth_m = 0.0f;
+    r->dvl_vx_m_s     = 0.0f;
+    r->dvl_vy_m_s     = 0.0f;
+
+    if ((imuQueue != NULL) && (xQueuePeek(imuQueue, &imu, 0) == pdPASS) &&
+        ((now - imu.timestamp_ms) <= LOG_STALE_MS))
+    {
+        r->imu_source    = imu.source;
+        r->imu_yaw_deg   = imu.yaw_deg;
+        r->imu_pitch_deg = imu.pitch_deg;
+        r->imu_roll_deg  = imu.roll_deg;
+    }
+
+    if ((depthQueue != NULL) && (xQueuePeek(depthQueue, &depth, 0) == pdPASS) &&
+        ((now - depth.timestamp_ms) <= LOG_STALE_MS))
+    {
+        r->depth_source   = depth.source;
+        r->sensor_depth_m = depth.depth_m;
+    }
+
+    if ((dvlQueue != NULL) && (xQueuePeek(dvlQueue, &dvl, 0) == pdPASS) &&
+        ((now - dvl.timestamp_ms) <= 2000U) && dvl.velocity_valid)
+    {
+        r->dvl_valid  = 1U;
+        r->dvl_vx_m_s = dvl.vx_m_s;
+        r->dvl_vy_m_s = dvl.vy_m_s;
+    }
+}
+
 void control_task(void *argument)
 {
 	(void)argument;
@@ -577,6 +629,9 @@ void control_task(void *argument)
 	            record->yaw_deg      = pose_now[5];
 	            record->armed        = control_loop_get_armed() ? 1 : 0;
 	            record->link_ok      = control_loop_get_link()  ? 1 : 0;
+
+	            log_sensors(record);
+
 	            record->crc16        = 0;
 
 	            // CRC over everything before the CRC field (it is last).

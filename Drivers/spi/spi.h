@@ -4,30 +4,11 @@
 #include <stdint.h>
 
 /*
- * SPI2 baud divisors.
- *
- * SPI2 is on APB1, so BR divides PCLK1 = 45 MHz:
- *
- *   BR  div    f_SCK        use
- *   000    2   22.500 MHz   too fast for both devices
- *   001    4   11.250 MHz   SD full speed (cards are rated >= 25 MHz)
- *   010    8    5.625 MHz   OLED — inside the SSD1306 ~10 MHz ceiling
- *   011   16    2.813 MHz
- *   100   32    1.406 MHz
- *   101   64  703.125 kHz
- *   110  128  351.563 kHz   SD init — inside the 100-400 kHz window
- *   111  256  175.781 kHz
- *
- * Two divisors land in the SD card's mandatory 100-400 kHz
- * initialisation window: div 128 (351.6 kHz) and div 256 (175.8 kHz).
- * div 128 is chosen because it is the faster of the two, not because it
- * is the only option. div 64 at 703 kHz is already outside the window.
- *
- * SD data rate starts at div 8 rather than div 4. 11.25 MHz is within
- * what any SDHC card will accept, but it is optimistic over Nucleo jumper
- * wiring with no controlled impedance. Raise SPI_BR_SD_DATA to
- * SPI_BR_DIV4 once the card reads reliably on the real harness - one
- * constant, one edit.
+ * SPI2 clock dividers. SPI2 runs from APB1 = 45 MHz:
+ *   /4   11.25 MHz
+ *   /8    5.625 MHz   SD data and the TFT (ILI9341 writes up to 10 MHz)
+ *   /128  352 kHz     SD start-up (must be 100-400 kHz)
+ * SD data could go to /4 once the card is reliable on the real wiring.
  */
 #define SPI_BR_DIV2     (0U << 3)
 #define SPI_BR_DIV4     (1U << 3)
@@ -38,25 +19,21 @@
 #define SPI_BR_DIV128   (6U << 3)
 #define SPI_BR_DIV256   (7U << 3)
 
-/* Named rates, so call sites say what they mean. */
-#define SPI_BR_SD_INIT      SPI_BR_DIV128   /* 351.563 kHz - identification */
-#define SPI_BR_SD_DATA      SPI_BR_DIV8     /*   5.625 MHz - conservative start */
-#define SPI_BR_OLED         SPI_BR_DIV8     /*   5.625 MHz - SSD1306 ceiling ~10 MHz */
+#define SPI_BR_SD_INIT      SPI_BR_DIV128
+#define SPI_BR_SD_DATA      SPI_BR_DIV8
+#define SPI_BR_TFT          SPI_BR_DIV8
 
 void    spi2_init(void);
 
-/*
- * Change SCK rate. Only legal with both chip selects deasserted and the
- * bus idle — enforced by convention, since only the bus owner task calls
- * this.
- */
+/* Change the clock. Only with both chip selects high (the bus owner
+ * calls it before each device's transfers). */
 void    spi_set_baud(uint32_t br_bits);
 
 void    spi_transmit(uint8_t data);
 uint8_t spi_receive(void);
 uint8_t spi_transfer(uint8_t data);
-void    spi_select_oled(void);
-void    spi_deselect_oled(void);
+void    spi_select_tft(void);
+void    spi_deselect_tft(void);
 void    spi_select_sd(void);
 void    spi_deselect_sd(void);
 

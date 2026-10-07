@@ -21,6 +21,7 @@ run bar30 tests/host/test_bar30.c Devices/bar30/ms5837_math.c -IDevices/bar30
 run dvl tests/host/test_dvl.c Devices/dvl/dvl.c -IDevices/dvl -Itests/host/stubs
 run adc_depth tests/host/test_adc_depth.c -IDevices/adc_depth
 run source_sel tests/host/test_source_select.c Core/Src/source_select.c -ICore/Inc
+run sd_logger tests/host/test_sd_logger.c Protocol/sd_card/sd_logger.c -IProtocol/sd_card
 
 rm -rf "$OUT"
 exit $fail

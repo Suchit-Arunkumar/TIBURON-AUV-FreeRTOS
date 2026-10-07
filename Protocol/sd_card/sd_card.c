@@ -1,3 +1,6 @@
+// SD card over SPI2 (SPI mode), single-block reads and writes.
+// After the scheduler starts only spi_owner_task calls this.
+
 #include "sd_card.h"
 #include "spi.h"
 
@@ -6,79 +9,33 @@
 #include "timer_timebase.h"
 
 #include <stddef.h>
+#include <stdbool.h>
 
-/*
- * Post-write busy timeout.
- *
- * The SD Physical Layer Simplified Specification sets the host timeout
- * for a single-block write at 250 ms (for SDSC it is derived from
- * TAAC/NSAC/R2W_FACTOR in the CSD but capped at the same figure). Typical
- * commit on a generic Class 10 card is 2-3 ms; the worst case is reached
- * when the card runs internal wear-levelling mid-write.
- *
- * TIMED AGAINST THE SCHEDULER TICK, not a loop count.
- *
- * Two earlier versions of this were loop counts. The first was a bare
- * 100000 iterations - about 110 ms, less than half the allowance, so a
- * merely-slow card was reported as failed. The second derived the count
- * from an estimated 1.822 us per poll, of which 0.40 us was a COMPUTED
- * driver overhead: if the true figure is 0.25 or 0.60 us, that "250 ms"
- * is really 229 ms or 275 ms, and 229 ms fails a card the specification
- * says must be tolerated. A loop count is also at the mercy of what the
- * optimiser does to the loop body.
- *
- * xTaskGetTickCount() is ground truth and immune to both. The only
- * caller of the block operations is spi_owner_task, which runs
- * post-scheduler, so the tick is always available there.
- */
+// The SD spec allows a single-block write up to 250 ms (wear levelling);
+// a typical one takes 2-3 ms.
 #define SD_WRITE_TIMEOUT_MS        250U
 #define SD_READ_TIMEOUT_MS         100U
 
-/*
- * Yield between polls instead of spinning.
- *
- * Spinning held the CPU at priority 3 for the entire wait. Control
- * (7) and the sensor tasks (4-6) preempt regardless, so the 50 Hz
- * deadline was never at risk - but everything BELOW the bus owner was
- * starved for up to 250 ms: consoleQueue stopped draining and the LD2
- * heartbeat froze, silencing diagnostics at precisely the moment
- * something worth diagnosing was happening.
- *
- * A 1 ms delay costs no useful latency. The card is not ready; polling it
- * 137000 times instead of 250 does not make it ready sooner, and the
- * typical 2-3 ms commit still completes in 2-3 polls.
- *
- * The chip select stays asserted across the delay, which is correct - SD
- * signals busy on DO with CS low. Nothing else can touch the bus meanwhile
- * because this task owns it structurally.
- */
+// While the card is busy, sleep 1 ms between polls instead of spinning,
+// so the tasks below this one keep running during a long write.
 #define SD_BUSY_POLL_INTERVAL_MS   1U
 
-/*
- * Pre-scheduler waits are bounded by TIM2's free-running microsecond
- * counter, not by a loop count.
- *
- * The tick-based path below is only valid once the scheduler is running:
- * before vTaskStartScheduler(), xTickCount is 0 and never advances, so a
- * tick deadline could never expire, and vTaskDelay() has no scheduler to
- * return from. Every wait here therefore branches on
- * xTaskGetSchedulerState().
- *
- * sd_init() does not currently reach these helpers - it uses only
- * sd_send_cmd's bounded retry loop - but sd_read_block() would if it were
- * ever called from main to read a config block, and the previous
- * fallback was an unquantified 200000-iteration spin. micros() gives the
- * pre-scheduler path the same real-time bound as the post-scheduler one.
- *
- * timer2_timebase_init() must therefore run BEFORE sd_init() in main.
- */
 #define SD_US_PER_MS               1000UL
 
 static int (*sd_card_detect)(void) = NULL;
 
+// SDSC cards (2 GB and under) take a byte address, SDHC/SDXC a block
+// number. Set from the OCR's CCS bit in sd_init().
+static bool byte_addressing = false;
+
 void sd_set_card_detect(int (*present_fn)(void))
 {
     sd_card_detect = present_fn;
+}
+
+bool sd_is_sdhc(void)
+{
+    return !byte_addressing;
 }
 
 const char *sd_status_str(SD_Status s)
@@ -96,18 +53,13 @@ const char *sd_status_str(SD_Status s)
     }
 }
 
-/*
- * Wait for the card to release DO (return 0xFF). Returns SD_OK if it did
- * so within timeout_ms, SD_ERR_IO otherwise.
- */
-/*
- * Poll `probe` until it returns 1, or timeout_ms elapses.
- *
- * Post-scheduler: tick-timed, yielding 1 ms between polls so the wait
- * cannot starve the tasks below the bus owner.
- * Pre-scheduler: TIM2 microsecond counter, bounded spin - there is no
- * scheduler to yield to, and nothing else is running anyway.
- */
+static uint32_t to_card_address(uint32_t block)
+{
+    return byte_addressing ? (block * 512U) : block;
+}
+
+// Before the scheduler there is no tick to time out on, so these waits use
+// the TIM2 microsecond counter instead.
 static SD_Status sd_wait_presched(uint8_t token, uint32_t timeout_ms)
 {
     uint32_t start   = micros();
@@ -120,8 +72,6 @@ static SD_Status sd_wait_presched(uint8_t token, uint32_t timeout_ms)
             return SD_OK;
         }
 
-        /* Unsigned wraparound makes this correct across TIM2's 32-bit
-         * rollover, which happens every ~71.6 minutes at 1 MHz. */
         if ((micros() - start) >= budget)
         {
             return SD_ERR_IO;
@@ -129,6 +79,7 @@ static SD_Status sd_wait_presched(uint8_t token, uint32_t timeout_ms)
     }
 }
 
+// Wait for the card to stop signalling busy (it returns 0xFF when ready).
 static SD_Status sd_wait_ready(uint32_t timeout_ms)
 {
     if (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING)
@@ -155,8 +106,7 @@ static SD_Status sd_wait_ready(uint32_t timeout_ms)
     return sd_wait_presched(0xFF, timeout_ms);
 }
 
-/* Wait for a specific token rather than for not-busy. Same tick-based
- * budget and the same yield rationale. */
+// Wait for a specific token, e.g. the 0xFE that starts a data block.
 static SD_Status sd_wait_token(uint8_t token, uint32_t timeout_ms)
 {
     if (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING)
@@ -192,19 +142,16 @@ static void sd_delay(void)
 
 static uint8_t sd_send_cmd(uint8_t cmd, uint32_t arg, uint8_t crc)
 {
-    // 1. transmit command byte: 0x40 | cmd
     spi_transmit(0x40 | cmd);
 
-    // 2. transmit arg bytes MSB first
     spi_transmit((arg >> 24) & 0xFF);
     spi_transmit((arg >> 16) & 0xFF);
     spi_transmit((arg >>  8) & 0xFF);
     spi_transmit((arg >>  0) & 0xFF);
 
-    // 3. transmit crc with stop bit
-    spi_transmit(crc | 0x01);
+    spi_transmit(crc | 0x01);   // CRC + stop bit
 
-    // 4. poll up to 8 times for valid R1 (bit7 == 0)
+    // R1 arrives within 8 bytes; bit 7 clear marks it
     uint8_t resp = 0xFF;
     for (uint8_t i = 0; i < 8; i++) {
         resp = spi_receive();
@@ -215,28 +162,21 @@ static uint8_t sd_send_cmd(uint8_t cmd, uint32_t arg, uint8_t crc)
 
 SD_Status sd_init(void)
 {
-    /* Optional mechanical card detect, if one was ever registered. */
     if ((sd_card_detect != NULL) && (sd_card_detect() == 0))
     {
         return SD_ERR_CD_ABSENT;
     }
 
-    /*
-     * B7: the whole identification sequence must run inside the SD
-     * specification's 100-400 kHz window. SPI_BR_SD_INIT is 351.6 kHz.
-     * Previously this all ran at full speed, which some cards tolerate
-     * and others silently refuse.
-     */
+    // identification must run at 100-400 kHz
     spi_set_baud(SPI_BR_SD_INIT);
 
-    // 1. power stabilisation delay
     sd_delay();
 
-    // 2. 80 dummy clocks with CS high to enter SPI mode
+    // 80 clocks with CS high puts the card in SPI mode
     spi_deselect_sd();
     for (uint8_t i = 0; i < 10; i++) spi_transmit(0xFF);
 
-    // 3. CMD0 — software reset, enter SPI mode
+    // CMD0: reset
     spi_select_sd();
     uint8_t r1 = sd_send_cmd(0, 0x00000000, 0x95);
     spi_deselect_sd();
@@ -244,7 +184,8 @@ SD_Status sd_init(void)
 
     if (r1 != 0x01) return SD_ERR_NO_CARD;
 
-    // 4. CMD8 — interface condition, check for v2 card
+    // CMD8: voltage check. A v2+ card echoes the 0xAA pattern; a v1 card
+    // rejects the command (illegal-command bit set).
     spi_select_sd();
     r1 = sd_send_cmd(8, 0x000001AA, 0x87);
     uint8_t r7[4];
@@ -252,30 +193,23 @@ SD_Status sd_init(void)
     spi_deselect_sd();
     spi_transmit(0xFF);
 
-    /*
-     * R7 must echo the voltage nibble and the 0xAA check pattern in its
-     * last two bytes. These four bytes have to be clocked out either way
-     * to keep the bus in sync; now the answer is actually inspected.
-     */
     if ((r1 & 0x04) == 0)
     {
-        /* Card understood CMD8, so it is v2.0+. Validate the echo. */
         if (((r7[2] & 0x0F) != 0x01) || (r7[3] != 0xAA))
         {
             return SD_ERR_CMD8;
         }
     }
 
-    // 5. ACMD41 loop — wait for card to finish init
+    // ACMD41 (CMD55 + CMD41) until the card leaves idle. HCS set: we
+    // accept high-capacity cards.
     uint32_t timeout = 1000;
     do {
-        // CMD55 — APP_CMD prefix
         spi_select_sd();
         sd_send_cmd(55, 0x00000000, 0x65);
         spi_deselect_sd();
         spi_transmit(0xFF);
 
-        // CMD41 — send operating condition, HCS bit set for SDHC
         spi_select_sd();
         r1 = sd_send_cmd(41, 0x40000000, 0x77);
         spi_deselect_sd();
@@ -286,7 +220,8 @@ SD_Status sd_init(void)
 
     if (timeout == 0) return SD_ERR_ACMD41_TIMEOUT;
 
-    // 6. CMD58 — read OCR, verify 3.3V support
+    // CMD58: read OCR. Bits 20-21 (ocr[1] & 0x30) = 3.2-3.4 V supported.
+    // Bit 30 (ocr[0] & 0x40) = CCS: block addressing (SDHC/SDXC).
     spi_select_sd();
     r1 = sd_send_cmd(58, 0x00000000, 0xFD);
     uint8_t ocr[4];
@@ -297,11 +232,19 @@ SD_Status sd_init(void)
     if (r1 != 0x00) return SD_ERR_IO;
     if (!(ocr[1] & 0x30)) return SD_ERR_OCR_VOLTAGE;
 
-    /*
-     * Identification is done. Move to the data rate for everything that
-     * follows. The bus owner re-asserts this per request type, but
-     * leaving it correct here keeps sd_init self-contained.
-     */
+    byte_addressing = ((ocr[0] & 0x40) == 0);
+
+    if (byte_addressing)
+    {
+        // CMD16: SDSC cards need the block length set to 512 bytes
+        spi_select_sd();
+        r1 = sd_send_cmd(16, 512U, 0x01);
+        spi_deselect_sd();
+        spi_transmit(0xFF);
+
+        if (r1 != 0x00) return SD_ERR_IO;
+    }
+
     spi_set_baud(SPI_BR_SD_DATA);
 
     return SD_OK;
@@ -311,13 +254,9 @@ SD_Status sd_write_block(uint32_t block_addr, const uint8_t *data)
 {
     uint8_t r1;
 
-    // SDSC cards need byte addressing
-    // block_addr *= 512;
-
     spi_select_sd();
 
-    // CMD24 = WRITE_BLOCK
-    r1 = sd_send_cmd(24, block_addr, 0x01);
+    r1 = sd_send_cmd(24, to_card_address(block_addr), 0x01);   // WRITE_BLOCK
 
     if (r1 != 0x00)
     {
@@ -326,23 +265,19 @@ SD_Status sd_write_block(uint32_t block_addr, const uint8_t *data)
         return SD_ERR_IO;
     }
 
-    // One byte gap before data token
-    spi_transmit(0xFF);
+    spi_transmit(0xFF);     // one byte gap
+    spi_transmit(0xFE);     // start-of-data token
 
-    // Start block token
-    spi_transmit(0xFE);
-
-    // Send 512-byte sector
     for (uint16_t i = 0; i < 512; i++)
     {
         spi_transmit(data[i]);
     }
 
-    // Dummy CRC (ignored unless CRC enabled)
+    // dummy CRC (CRC checking is off in SPI mode)
     spi_transmit(0xFF);
     spi_transmit(0xFF);
 
-    // Data response token
+    // data response: xxx0 0101 = accepted
     uint8_t response = spi_receive();
 
     if ((response & 0x1F) != 0x05)
@@ -352,10 +287,7 @@ SD_Status sd_write_block(uint32_t block_addr, const uint8_t *data)
         return SD_ERR_IO;
     }
 
-    /*
-     * Wait out the card's internal program cycle: tick-timed, yielding
-     * between polls. See SD_WRITE_TIMEOUT_MS above.
-     */
+    // the card holds MISO low while it programs the block
     SD_Status busy = sd_wait_ready(SD_WRITE_TIMEOUT_MS);
 
     spi_deselect_sd();
@@ -368,13 +300,9 @@ SD_Status sd_read_block(uint32_t block_addr, uint8_t *buf)
 {
     uint8_t r1;
 
-    // SDSC cards require byte addressing
-    // block_addr *= 512;
-
-    // 1. CS low, send CMD17
     spi_select_sd();
 
-    r1 = sd_send_cmd(17, block_addr, 0x01);
+    r1 = sd_send_cmd(17, to_card_address(block_addr), 0x01);   // READ_SINGLE_BLOCK
 
     if (r1 != 0x00)
     {
@@ -383,7 +311,6 @@ SD_Status sd_read_block(uint32_t block_addr, uint8_t *buf)
         return SD_ERR_IO;
     }
 
-    // 2. Wait for start token 0xFE
     if (sd_wait_token(0xFE, SD_READ_TIMEOUT_MS) != SD_OK)
     {
         spi_deselect_sd();
@@ -391,13 +318,12 @@ SD_Status sd_read_block(uint32_t block_addr, uint8_t *buf)
         return SD_ERR_IO;
     }
 
-    // 3. Read 512-byte sector
     for (uint16_t i = 0; i < 512; i++)
     {
         buf[i] = spi_receive();
     }
 
-    // 4. Discard CRC16
+    // discard the CRC
     spi_receive();
     spi_receive();
 

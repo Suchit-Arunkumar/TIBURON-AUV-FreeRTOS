@@ -9,42 +9,13 @@
 #include <stdint.h>
 
 /*
- * Record batching.
- *
- * A LogRecord is 40 bytes and control_task emits one every 10th tick, so
- * 5 Hz - 200 B/s of actual data. Writing each record as its own 512-byte
- * block meant issuing 2560 B/s of block programs: 12.8x write
- * amplification, one full program/erase cycle per 40 bytes of payload,
- * and five exposures per second to the SD card's 250 ms worst-case busy
- * time.
- *
- * Records now accumulate into a 512-byte staging block and go out once it
- * fills - roughly every 2.4 s - or on an explicit flush.
- *
- * Layout: a 16-byte header so a block is self-describing when pulled off
- * the card offline, then as many whole records as fit.
- *
- *   (512 - 16) / 40 = 12.4  ->  12 records, 480 bytes, 16 bytes padding
+ * Records are packed into 512-byte blocks and written when a block is full
+ * (7 records, every ~1.4 s) or on a flush. One block per record would program 7x
+ * more flash and hit the card's 250 ms worst-case busy time 5 times a
+ * second. Block layout: sd_logger.h.
  */
-#define LOG_BLOCK_MAGIC          0x54424C31UL   /* "TBL1" */
-#define LOG_RECORDS_PER_BLOCK    12U
-
-typedef struct __attribute__((packed))
-{
-    uint32_t magic;
-    uint32_t seq;              /* block sequence number, from 0        */
-    uint16_t record_count;     /* valid records in this block          */
-    uint16_t record_size;      /* sizeof(LogRecord), for offline parse */
-    uint32_t first_timestamp;  /* tick of the first record             */
-} LogBlockHeader;
-
-/*
- * What travels on logQueue.
- *
- * A flush is a queue item rather than a task notification so it stays in
- * order with the records around it: a flush posted after N records
- * flushes exactly those N, with no race against the staging buffer.
- */
+/* What goes on logQueue. A flush is a queue item, not a notification, so
+ * it stays in order with the records before it. */
 typedef enum
 {
     LOG_ITEM_RECORD = 0,
