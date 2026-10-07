@@ -4,73 +4,72 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+/*
+ * Teledyne Wayfinder DVL, binary data output message.
+ *
+ * Layout from Teledyne's "Wayfinder Binary Interface Packet Protocol"
+ * page (field sizes summed into offsets), little-endian, 116 bytes:
+ *
+ *   0-5     SOP            AA 10 01 74 00 10
+ *   6-14    data ID        05 6D 00 AA 11 69 00 00 00
+ *   15      system type    0x4C (76) for a Wayfinder
+ *   16-20   sub-type, firmware version
+ *   21-28   RTC: year, month, day, hour, minute, second (u8), ms (u16)
+ *   29      coordinate system
+ *   30-45   bottom-track velocity x, y, z, error   float m/s
+ *   46-61   range to bottom, beams 1-4              float m
+ *   62      mean range to bottom                    float m
+ *   66      speed of sound                          float m/s
+ *   70      BT status (u16), 72 BIT flags (u16)
+ *   74-85   input voltage, transmit voltage, transmit current (float)
+ *   86-111  serial number (6), reserved (20)
+ *   112     checksum - data (u16), 114 checksum (u16)
+ *
+ * Velocities and ranges are NaN when there is no bottom lock (Wayfinder
+ * DVL Guide, "Data Screening"). Those frames are still published, with
+ * velocity_valid = false, so the Pi can tell "DVL alive, no bottom" from
+ * "no DVL".
+ */
 #define DVL_PACKET_LENGTH 116U
 
 typedef struct
 {
-    /* Wayfinder instrument coordinate system */
+    uint32_t timestamp_ms;      /* STM32 tick when the frame arrived */
+
+    bool  velocity_valid;       /* false when any of vx, vy, vz is NaN */
     uint8_t coordinate_system;
 
-    /* Bottom-track velocity [m/s] */
-    float vx;
-    float vy;
-    float vz;
-    float velocity_error;
+    float vx_m_s;
+    float vy_m_s;
+    float vz_m_s;
+    float verr_m_s;
 
-    /* Range to bottom [m] */
-    float range_beam1;
-    float range_beam2;
-    float range_beam3;
-    float range_beam4;
-    float mean_range;
+    float range_beam_m[4];
+    float mean_range_m;
+    float speed_of_sound_m_s;
 
-    /* Speed of sound used by DVL [m/s] */
-    float speed_of_sound;
-
-    /* Wayfinder status */
     uint16_t status;
-
-    /* Built-in-test status */
     uint16_t bit;
 
-    /* Electrical measurements */
-    float input_voltage;
-    float transmit_voltage;
-    float transmit_current;
-
-    /* Wayfinder RTC timestamp */
-    uint8_t year;
-    uint8_t month;
-    uint8_t day;
-    uint8_t hour;
-    uint8_t minute;
-    uint8_t second;
-    uint16_t milliseconds;
-
-    /* STM32 reception timestamp */
-    uint32_t timestamp_ms;
-
-    /*
-     * True only when the packet and velocity data
-     * have passed validation.
-     */
-    bool valid;
-
+    float input_voltage_v;
 } DVLData;
 
+/*
+ * Feed one received byte. Returns true when this byte completed a frame
+ * that passed the checks; the frame is then in *out. All parser state is
+ * private to dvl_task, so there is no locking.
+ */
+bool dvl_feed_byte(uint8_t byte, DVLData *out);
+
+/* Frames accepted, and frames rejected (bad header or checksum). */
+uint32_t dvl_frames_ok(void);
+uint32_t dvl_frames_bad(void);
 
 /*
- * Feed one byte into the Wayfinder parser.
- *
- * Returns true when a complete valid measurement
- * has been decoded.
+ * Which checksum reading matched, see dvl.c: final checksum over bytes
+ * 0-113 (includes the data checksum) or over 0-111 (excludes it).
  */
-bool dvl_feed_byte(uint8_t byte);
-
-
-/*
- * Copy the latest valid DVL measurement.
- */
-bool dvl_get_data(DVLData *out);
+uint32_t dvl_sum_incl_count(void);
+uint32_t dvl_sum_excl_count(void);
 
 #endif
