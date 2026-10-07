@@ -583,9 +583,11 @@ int main(void)
 
 
     /*
-     * 10. Initialize I2C1.
+     * 10. Initialize I2C1, and create the mutex that lets more than
+     *     one task share it (checked with the queues below).
      */
     i2c1_init();
+    int i2c_lock_ok = i2c1_lock_create();
 
 
     /*
@@ -746,16 +748,17 @@ int main(void)
         bar30Queue == NULL ||
         logQueue == NULL ||
         spiRequestQueue == NULL ||
-        consoleQueue == NULL)
+        consoleQueue == NULL ||
+        !i2c_lock_ok)
     {
-        printf("QUEUE CREATE FAIL\r\n");
+        printf("QUEUE OR MUTEX CREATE FAIL\r\n");
 
         fault_latch_fail(
             FAULT_INIT_FAILED,
             __FILE__,
             __LINE__,
             (uint32_t)__builtin_return_address(0),
-            "xQueueCreate returned NULL"
+            "queue/mutex create NULL"
         );
     }
 

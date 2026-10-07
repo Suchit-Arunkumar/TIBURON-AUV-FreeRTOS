@@ -31,6 +31,13 @@ typedef enum
 
 const char *i2c_status_str(I2C_Status s);
 
+/*
+ * Create the bus mutex. Call once from main before the scheduler starts;
+ * returns 0 if the heap is exhausted. Every function below takes the
+ * mutex for the length of one transfer once the scheduler is running.
+ */
+int        i2c1_lock_create(void);
+
 /* 400 kHz fast mode. Every device on I2C1 supports it: the Bar30
  * (MS5837 datasheet, SCL max 400 kHz), the BNO085 and the bench MPU-6050. */
 void       i2c1_init(void);

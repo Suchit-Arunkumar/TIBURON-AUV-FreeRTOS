@@ -5,6 +5,7 @@
 
 #include "FreeRTOS.h"
 #include "task.h"
+#include "semphr.h"
 
 #define APB1CLK_MHZ  45U
 
@@ -187,7 +188,7 @@ void i2c1_init(void)
 	I2C1->CR1 |= I2C_CR1_PE;
 }
 
-void i2c1_bus_recover(void)
+static void bus_recover_unlocked(void)
 {
     /*
      * A slave that was reset mid-transfer can hold SDA low and leave the
@@ -221,7 +222,7 @@ void i2c1_bus_recover(void)
     i2c1_init();
 }
 
-I2C_Status i2c_write(uint8_t addr, const uint8_t *data, uint16_t len)
+static I2C_Status write_unlocked(uint8_t addr, const uint8_t *data, uint16_t len)
 {
     // 1. generate START condition
 	I2C1->CR1 |= I2C_CR1_START;
@@ -278,7 +279,7 @@ I2C_Status i2c_write(uint8_t addr, const uint8_t *data, uint16_t len)
 	return I2C_OK;
 }
 
-I2C_Status i2c_read_legacy(uint8_t addr, uint8_t *buf, uint16_t len)
+static I2C_Status read_legacy_unlocked(uint8_t addr, uint8_t *buf, uint16_t len)
 {
     // 1. generate START condition
 	I2C1->CR1 |= I2C_CR1_ACK;
@@ -350,7 +351,7 @@ static I2C_Status rm_fail(I2C_Status st)
 	return i2c_fail(st);
 }
 
-I2C_Status i2c_read(uint8_t addr, uint8_t *buf, uint16_t len)
+static I2C_Status read_unlocked(uint8_t addr, uint8_t *buf, uint16_t len)
 {
     UBaseType_t m;
 
@@ -459,4 +460,110 @@ I2C_Status i2c_read(uint8_t addr, uint8_t *buf, uint16_t len)
     buf[i] = (uint8_t)I2C1->DR;             /* N */
 
     return I2C_OK;
+}
+
+
+/*
+ * One I2C1 bus, two tasks.
+ *
+ * The Bar30 (depth_task) and the BNO085 (imu_task) share I2C1. A transfer
+ * is a sequence of register accesses that must not be interleaved with
+ * another task's, so every public function below takes this mutex for
+ * exactly one transfer and gives it back straight after.
+ *
+ * Held per transfer, not per sensor reading: the Bar30 waits ~10 ms for
+ * each conversion between two transfers, and the BNO085 can use the bus
+ * during that wait. Different devices answer to different addresses, so
+ * one device's transfers landing between another's is harmless.
+ *
+ * A mutex rather than a binary semaphore for priority inheritance: if a
+ * low-priority task holds the bus, a higher-priority one waiting for it
+ * lifts the holder's priority until it lets go.
+ *
+ * Before the scheduler starts there is only one thread of execution, so
+ * the lock is skipped.
+ */
+#define I2C_LOCK_TIMEOUT_MS   50U
+
+static SemaphoreHandle_t i2c_mutex = NULL;
+
+int i2c1_lock_create(void)
+{
+    if (i2c_mutex == NULL)
+    {
+        i2c_mutex = xSemaphoreCreateMutex();
+    }
+
+    return (i2c_mutex != NULL) ? 1 : 0;
+}
+
+static int bus_take(void)
+{
+    if ((i2c_mutex == NULL) ||
+        (xTaskGetSchedulerState() != taskSCHEDULER_RUNNING))
+    {
+        return 1;
+    }
+
+    return (xSemaphoreTake(i2c_mutex, pdMS_TO_TICKS(I2C_LOCK_TIMEOUT_MS)) == pdTRUE) ? 1 : 0;
+}
+
+static void bus_give(void)
+{
+    if ((i2c_mutex != NULL) &&
+        (xTaskGetSchedulerState() == taskSCHEDULER_RUNNING))
+    {
+        (void)xSemaphoreGive(i2c_mutex);
+    }
+}
+
+I2C_Status i2c_write(uint8_t addr, const uint8_t *data, uint16_t len)
+{
+    if (!bus_take())
+    {
+        return I2C_ERR_BUSY;
+    }
+
+    I2C_Status st = write_unlocked(addr, data, len);
+
+    bus_give();
+    return st;
+}
+
+I2C_Status i2c_read(uint8_t addr, uint8_t *buf, uint16_t len)
+{
+    if (!bus_take())
+    {
+        return I2C_ERR_BUSY;
+    }
+
+    I2C_Status st = read_unlocked(addr, buf, len);
+
+    bus_give();
+    return st;
+}
+
+I2C_Status i2c_read_legacy(uint8_t addr, uint8_t *buf, uint16_t len)
+{
+    if (!bus_take())
+    {
+        return I2C_ERR_BUSY;
+    }
+
+    I2C_Status st = read_legacy_unlocked(addr, buf, len);
+
+    bus_give();
+    return st;
+}
+
+void i2c1_bus_recover(void)
+{
+    if (!bus_take())
+    {
+        return;
+    }
+
+    bus_recover_unlocked();
+
+    bus_give();
 }
