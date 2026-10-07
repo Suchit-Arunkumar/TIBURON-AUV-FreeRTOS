@@ -39,11 +39,7 @@ char console_take_command(void)
 
 void console_printf(const char *fmt, ...)
 {
-    /*
-     * The formatted line lives on the CALLER's stack, so every task pays
-     * CONSOLE_LINE_LEN bytes of stack for the duration of this call. That
-     * is accounted for in the Phase 9 stack audit.
-     */
+    // on the caller's stack: every task that prints needs ~80 B for this
     ConsoleLine line;
     va_list args;
 
@@ -51,15 +47,9 @@ void console_printf(const char *fmt, ...)
     (void)vsnprintf(line.text, sizeof(line.text), fmt, args);
     va_end(args);
 
-    /*
-     * The owner writes its own lines directly. It is the only task that
-     * drains consoleQueue, so a line it posted there could not be printed
-     * until it returned to its loop, and a report longer than the queue
-     * (CONSOLE_QUEUE_DEPTH = 8) lost its tail: the 13-line health and stack
-     * reports were printing 8 lines and counting the rest as drops.
-     * Writing directly is still single-owner output; the only cost is
-     * that lines other tasks queued meanwhile print after the report.
-     */
+    // The owner writes its own lines directly: queued, a report longer
+    // than the queue lost its tail, since nobody drains the queue while
+    // the owner is busy filling it.
     if ((console_owner != NULL) && (xTaskGetCurrentTaskHandle() == console_owner))
     {
         uart2_write_str(line.text);
@@ -74,11 +64,7 @@ void console_printf(const char *fmt, ...)
         return;
     }
 
-    /*
-     * Zero block time, always. A full console queue means the owner is
-     * behind; the correct response is to lose the message, not to delay
-     * whichever task produced it.
-     */
+    // never wait: losing a debug line is better than delaying the caller
     if (xQueueSend(consoleQueue, &line, 0) != pdPASS)
     {
         console_drop_count++;

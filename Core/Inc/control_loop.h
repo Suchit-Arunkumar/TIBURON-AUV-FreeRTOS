@@ -16,29 +16,13 @@
 #define PWM_MIN         1100
 #define PWM_MAX         1900
 #define PWM_NEUTRAL     1500
-/*
- * Slew limit, applied ONLY while ramping out of failsafe.
- *
- * 50 us per 20 ms tick is 2500 us/s. Against the 800 us band that is
- * 6.25% of full range per tick: a full-scale reversal takes 16 ticks
- * (320 ms) and neutral to full takes 8 ticks (160 ms).
- *
- * That is the right behaviour when recovering from a comms loss - the
- * vehicle should walk up from neutral, not step - and the WRONG
- * behaviour in normal closed-loop operation, where it silently caps
- * control authority and looks exactly like badly tuned gains. It used to
- * be applied on every armed tick; see control_loop_ramping().
- */
+// Slew limit while ramping up after a disarm: 50 us per tick, so neutral
+// to full takes 8 ticks (160 ms).
 #define PWM_RAMP_STEP   50      /* us per 50 Hz tick -> 2500 us/s slew rate */
 #define CMD_TIMEOUT_MS  500u    /* ms without a valid CMD before failsafe     */
 
-/*
- * Recovery after a comms loss requires this many CONSECUTIVE CRC-valid
- * packets. One good packet after a dropout is not evidence of a restored
- * link - it may be the only one that got through, or a stale frame that
- * was buffered somewhere along the way. Three in a row at the Pi's send
- * rate is real.
- */
+// Valid packets in a row needed to leave failsafe: one packet after a
+// dropout doesn't prove the link is back.
 #define CMD_RECOVERY_PACKETS  3u
 
 extern volatile bool link_ok;
@@ -55,11 +39,8 @@ void control_loop_get_u(float out[N_DOF]);
 /* Allocation saturation: bit0 vertical, bit1 horizontal, bit2 yaw. */
 uint8_t control_loop_get_sat_flags(void);
 
-/*
- * Everything telemetry reports about the controller, copied in one go.
- * Read through control_loop_snapshot() from other tasks, so a packet never
- * mixes values from two different control ticks.
- */
+// What telemetry reports, copied in one go so a packet never mixes two
+// control ticks.
 typedef struct
 {
     float    pose[N_DOF];
@@ -81,32 +62,17 @@ void control_loop_tick(void);
 /* Pose (x, y, z, roll, pitch, yaw) from the Pi's fused nav state. */
 void state_update(const float new_pose[N_DOF]);
 
-/*
- * Accept a new setpoint from a CRC-valid command packet.
- *
- * While in failsafe, the first CMD_RECOVERY_PACKETS-1 calls only count
- * towards recovery and do NOT move the setpoint or re-arm. The packet
- * that completes the streak becomes the active setpoint.
- *
- * A setpoint from before the dropout is never restored: enterFailsafe()
- * zeroes the target, and the ramp in applyPWM() then walks the thrusters
- * up from neutral rather than stepping to whatever the vehicle was doing
- * when the link died.
- */
+// New setpoint from a valid command. In failsafe, packets only count
+// towards recovery until CMD_RECOVERY_PACKETS have arrived.
 void target_update(const float new_target[N_DOF], bool arm_flag);
 
 /* True while the failsafe latch is engaged and recovery is incomplete. */
 bool control_loop_in_failsafe(void);
 
-/*
- * True while the post-recovery slew limiter is still active. Clears on
- * the first tick where every output reached its commanded value without
- * being clamped, after which the PID has full authority.
- */
+// True while the slew limiter is still on after a disarm.
 bool control_loop_ramping(void);
 
-/* Consecutive CRC-valid packets seen since the last loss, saturating at
- * CMD_RECOVERY_PACKETS. For the console health report. */
+// Recovery progress, for the health report.
 uint8_t control_loop_recovery_count(void);
 
 void enterFailsafe(void);

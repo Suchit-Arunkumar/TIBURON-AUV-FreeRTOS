@@ -1,3 +1,6 @@
+// USART1: Raspberry Pi link, 115200 baud. RX: circular DMA (DMA2 Stream2)
+// into the packet ring buffer. TX: one frame at a time on DMA2 Stream7.
+
 #include "uart_packet.h"
 #include "stm32f446xx.h"
 #include "ring_buffer.h"
@@ -8,100 +11,60 @@
 #define APB2CLK 90000000U
 #define UART1_BR 115200U
 
-// DMA receive buffer — DMA writes directly into this
 static uint8_t dma_rx_buf[DMA_BUF_SIZE];
 
-// track last DMA position to detect new bytes
 static uint16_t last_dma_pos = 0;
 
 void uart1_init(void)
 {
-    // 1. enable GPIOA clock in RCC AHB1ENR
+	// PA9 TX, PA10 RX, AF7
 	RCC->AHB1ENR |= RCC_AHB1ENR_GPIOAEN;
 
-    // 2. configure PA9 as alternate function mode (MODER = 10)
 	GPIOA->MODER &= ~(3U << (2*9));
 	GPIOA->MODER |=  (2U << (2*9));
 
-    // 3. configure PA10 as alternate function mode (MODER = 10)
 	GPIOA->MODER &= ~(3U << (2*10));
 	GPIOA->MODER |=  (2U << (2*10));
 
-	// PA10 pull-up: UART idles high, so an unconnected RX reads idle, not noise
+	// pull-up so an unconnected RX idles high instead of floating
 	GPIOA->PUPDR &= ~(3U << (2*10));
 	GPIOA->PUPDR |=  (1U << (2*10));
 
-    // 4./5. PA9 -> AF7 (USART1 TX), PA10 -> AF7 (USART1 RX), AFRH.
-    //    Cleared before set. A bare |= is correct only from reset, which is
-    //    the read-modify-write bug class that broke PA6 in the bare-metal
-    //    tree; every other driver here already clears first.
 	GPIOA->AFR[1] &= ~((0xFU << 4) | (0xFU << 8));
 	GPIOA->AFR[1] |=  ((7U   << 4) | (7U   << 8));
 
-    // 6. enable USART1 clock in RCC APB2ENR
 	RCC->APB2ENR |= RCC_APB2ENR_USART1EN;
 
-    // 7. set baud rate in USART1 BRR (APB2 = 90MHz, target = 115200)
 	USART1->BRR = ((APB2CLK + UART1_BR/2)/UART1_BR);
 
-    // 8. enable receiver (RE) and transmitter (TE) in USART1 CR1
-    //    TE is needed for telemetry - without it TXE never sets and
-    //    uart1_write_buf() spins forever
 	USART1->CR1 |= USART_CR1_RE | USART_CR1_TE;
-
-    // 9. enable IDLE line interrupt (IDLEIE bit) in USART1 CR1
 	USART1->CR1 |= USART_CR1_IDLEIE;
-
-    // 10. enable DMA RX request (DMAR bit) in USART1 CR3
 	USART1->CR3 |= USART_CR3_DMAR;
-
-    // 11. enable USART1 (UE bit) in USART1 CR1
 	USART1->CR1 |= USART_CR1_UE;
 
-	// 12. enable DMA2 clock
 	RCC->AHB1ENR |= RCC_AHB1ENR_DMA2EN;
 
-	// 13. configure DMA2 Stream2 for USART1 RX
-
-	    // disable stream first before configuring
+	// RX: DMA2 Stream2 channel 4, circular
 	    DMA2_Stream2->CR &= ~DMA_SxCR_EN;
-
-	    // wait until stream is disabled
 	    while(DMA2_Stream2->CR & DMA_SxCR_EN);
 
-	    // set peripheral address — where DMA reads from
 	    DMA2_Stream2->PAR = (uint32_t)&USART1->DR;
-
-	    // set memory address — where DMA writes to
 	    DMA2_Stream2->M0AR = (uint32_t)dma_rx_buf;
-
-	    // set number of data items
 	    DMA2_Stream2->NDTR = DMA_BUF_SIZE;
 
-	    // set channel 4 (CHSEL bits 27:25 = 100)
 	    DMA2_Stream2->CR &= ~DMA_SxCR_CHSEL;
 	    DMA2_Stream2->CR |= (4U << DMA_SxCR_CHSEL_Pos);
 
-	    // enable circular mode
 	    DMA2_Stream2->CR |= DMA_SxCR_CIRC;
-
-	    // half-transfer and transfer-complete interrupts: see
-	    // uart1_dma_drain() for why IDLE alone is not enough
 	    DMA2_Stream2->CR |= DMA_SxCR_HTIE | DMA_SxCR_TCIE;
-
-	    // enable memory increment
 	    DMA2_Stream2->CR |= DMA_SxCR_MINC;
-
-	    // set transfer direction — peripheral to memory
 	    DMA2_Stream2->CR &= ~DMA_SxCR_DIR;
 
-	    // enable the stream
 	    DMA2_Stream2->CR |= DMA_SxCR_EN;
 
 
-	// 14. TX DMA: DMA2 Stream7 channel 4 (USART1_TX), memory to peripheral.
-	//     Only the fixed parts are set here; uart1_tx_dma_start() fills in
-	//     the address and length for each frame.
+	// TX: DMA2 Stream7 channel 4. Address and length are set per frame
+	// in uart1_tx_dma_start().
 	    USART1->CR3 |= USART_CR3_DMAT;
 
 	    DMA2_Stream7->CR &= ~DMA_SxCR_EN;
@@ -116,41 +79,26 @@ void uart1_init(void)
 
 	    NVIC_SetPriority(DMA2_Stream7_IRQn, 6);
 
-	 // 15. enable USART1 interrupt in NVIC
+	 // USART1 and its RX DMA at the same priority: they share
+	 // last_dma_pos. Enabled later by uart1_irq_enable().
 	 NVIC_SetPriority(USART1_IRQn, 5);
-
-	 // Same priority as USART1 on purpose: the two handlers share
-	 // last_dma_pos, and equal priorities cannot preempt each other.
 	 NVIC_SetPriority(DMA2_Stream2_IRQn, 5);
-	 /* NVIC_EnableIRQ deferred to uart1_irq_enable() - see below. */
 
 }
 
 
 
 /*
- * Move everything the DMA has written since the last call into the ring
- * buffer, then wake comms_task.
- *
- * The position is SIZE - NDTR, so it can only tell "where the DMA is", not
- * "how far it has gone". If exactly DMA_BUF_SIZE bytes arrive between two
- * calls, the position comes back to where it was and the whole buffer is
- * indistinguishable from no data at all. With IDLE as the only trigger that
- * happens whenever a burst is exactly 256 bytes long with no gap; the bench
- * reproduces it on demand (tools/hil/hil_rtos.py, "DMA wrap").
- *
- * The half-transfer and transfer-complete interrupts fire at fixed points
- * in the buffer, 128 bytes apart, so between two calls the DMA can never
- * move a full lap. IDLE still catches the tail of a burst that ends between
- * those points. Both handlers run at priority 5, at the FreeRTOS ceiling,
- * and cannot preempt each other.
+ * Copy what the DMA wrote since last time into the ring and wake
+ * comms_task. The position (SIZE - NDTR) can't tell "no data" from "a
+ * full 256-byte lap", so as well as IDLE this runs on the half and full
+ * transfer events, 128 bytes apart. The bench reproduces the lost lap
+ * with the HT/TC events ignored ('v' key).
  */
 static void uart1_dma_drain(bool from_dma_event)
 {
     uint16_t current_pos = (uint16_t)(DMA_BUF_SIZE - DMA2_Stream2->NDTR);
 
-    /* Defensive: NDTR is 1..SIZE while the stream runs, so this is 0..SIZE-1;
-     * fold an out-of-range read to 0 rather than index past the buffer. */
     if (current_pos >= DMA_BUF_SIZE)
     {
         current_pos = 0;
@@ -174,12 +122,6 @@ static void uart1_dma_drain(bool from_dma_event)
 
     bench_uart1_rx_bytes(moved, from_dma_event);
 
-    /*
-     * B5: USART1 is enabled before comms_task is created, so a byte
-     * arriving in that window would reach a NULL handle and trip
-     * configASSERT inside the kernel. USART3 and UART4 already
-     * guarded this; USART1 did not.
-     */
     if ((moved != 0U) && (commsTaskHandle != NULL))
     {
         BaseType_t xHigherPriorityTaskWasWoken = pdFALSE;
@@ -233,19 +175,11 @@ void DMA2_Stream2_IRQHandler(void)
 
 
 /*
- * Start sending len bytes from buf with DMA and return immediately.
- *
- * Before this, comms_task wrote every byte itself and spun on TXE in
- * between: a 62-byte frame at 115200 baud is 5.4 ms, and the bench run
- * measured comms_task at 27% CPU just waiting (54% with a second frame
- * per tick). Now the CPU writes nothing; DMA2 Stream7 feeds the UART and
- * DMA2_Stream7_IRQHandler tells comms_task when the frame is gone.
- *
- * Returns false if a frame is still being sent. buf must stay untouched
- * until COMMS_NOTIFY_TX_DONE arrives.
- *
- * UNTESTED on hardware: re-run the hil_rtos.py loopback and CPU-load
- * tests to confirm frames still arrive and comms_task CPU drops.
+ * Send a frame with DMA and return straight away; the transfer-complete
+ * interrupt tells comms_task when it's gone. Returns false if a frame is
+ * still going out. buf must not change until then. (Writing bytes by hand
+ * cost 5.4 ms of busy-waiting per frame.)
+ * UNTESTED on hardware.
  */
 bool uart1_tx_dma_start(const uint8_t *buf, uint16_t len)
 {
@@ -254,8 +188,7 @@ bool uart1_tx_dma_start(const uint8_t *buf, uint16_t len)
         return false;
     }
 
-    // stale flags from the previous transfer would stop the stream
-    // starting, so clear all of Stream7's flags first
+    // leftover flags from the last transfer stop the stream starting
     DMA2->HIFCR = DMA_HIFCR_CTCIF7 | DMA_HIFCR_CHTIF7 | DMA_HIFCR_CTEIF7
                 | DMA_HIFCR_CDMEIF7 | DMA_HIFCR_CFEIF7;
 
@@ -277,11 +210,8 @@ void DMA2_Stream7_IRQHandler(void)
 
     DMA2->HIFCR = DMA_HIFCR_CTCIF7 | DMA_HIFCR_CTEIF7;
 
-    /*
-     * A transfer error is reported the same way as completion: either way
-     * the stream has stopped and the buffer is free. The frame is lost,
-     * which the Pi sees as a missing telemetry packet, nothing worse.
-     */
+    // On a transfer error the frame is lost, but the stream has stopped
+    // and the buffer is free either way.
     if (commsTaskHandle != NULL)
     {
         BaseType_t woken = pdFALSE;
@@ -291,11 +221,9 @@ void DMA2_Stream7_IRQHandler(void)
     }
 }
 
-/*
- * Blocking write. Only the bench injector uses this now; it first waits
- * for any DMA frame still going out, so the two never interleave on the
- * wire.
- */
+// Blocking write, used only by the bench injector. Waits for any DMA
+// frame first so the two don't interleave.
+
 void uart1_write_buf(uint8_t *buf, uint16_t len)
 {
     while (DMA2_Stream7->CR & DMA_SxCR_EN)
@@ -321,25 +249,7 @@ void uart1_write_byte(uint8_t b)
     USART1->DR = b;
 }
 
-/*
- * B6-class hazard, second half.
- *
- * Configuring the peripheral and ENABLING its NVIC line are now separate.
- * Between the last xTaskCreate and vTaskStartScheduler(), pxCurrentTCB is
- * populated but PSP is still zero - vPortSVCHandler sets it, and that
- * only runs inside vPortStartFirstTask. An interrupt in that window that
- * reached portYIELD_FROM_ISR would pend PendSV, and PendSV's context save
- * does `mrs r0, PSP` then `stmdb r0!, {...}` - writing through a null
- * stack pointer.
- *
- * From vTaskStartScheduler() onward the window is closed by the kernel:
- * tasks.c does portDISABLE_INTERRUPTS() (BASEPRI = 0x50) before
- * xPortStartScheduler(), which masks every interrupt in this design
- * (0x50 and 0x60) until vPortSVCHandler clears BASEPRI with a task
- * running. So enabling the line from inside the consuming task's first
- * iteration means no kernel API is reachable from any ISR until a task
- * context genuinely exists.
- */
+// Called by comms_task when it first runs, never from main (see uart3.c).
 void uart1_irq_enable(void)
 {
     NVIC_EnableIRQ(USART1_IRQn);

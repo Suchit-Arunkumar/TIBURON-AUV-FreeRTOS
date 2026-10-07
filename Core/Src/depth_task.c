@@ -11,32 +11,19 @@
 #include "bench.h"
 
 /*
- * One loop, two sensors, each on its own schedule.
- *
- * The loop runs every DEPTH_PERIOD_MS. The analog sensor is read on every
- * pass. The Bar30 is attempted when its next-attempt time comes round,
- * which is every pass while it works and backs off while it fails. Before,
- * the Bar30's back-off set the period of the whole loop, which would have
- * slowed the analog sensor to 1 Hz exactly when it is needed as a backup.
- *
- * A Bar30 reading is two ~12 ms conversions, so with it working the loop
- * runs at about 35 Hz.
+ * Runs every 20 ms. The analog sensor is read every pass; the Bar30 has
+ * its own next-attempt time, so its back-off when failing doesn't slow the
+ * analog backup down. A Bar30 reading takes ~25 ms (two conversions).
  */
 #define DEPTH_PERIOD_MS           20U
 
-/*
- * Bar30 back-off: every failed attempt still costs bounded I2C timeouts.
- * One failure slows retries to 100 ms; after 5 it is declared absent and
- * retried once a second, which still notices it being plugged in.
- * Backing off on any failure, not only once absent, matters most for a
- * sensor on jumper wires that NACKs now and then.
- */
+// Retry slower after a failure (100 ms), and once a second after 5 in a
+// row, which still notices it being plugged in.
 #define BAR30_SLOW_RETRY_MS      100U
 #define BAR30_ABSENT_RETRY_MS   1000U
 #define BAR30_ABSENT_FAILURES      5U
 
-/* Attempt a bus recovery after this many consecutive failures, in case a
- * slave is holding SDA low rather than simply being missing. */
+// in case a slave is holding SDA low
 #define BAR30_RECOVER_AFTER       20U
 
 #define ADC_ABSENT_READS          50U   /* ~1 s of failed reads */
@@ -66,8 +53,6 @@ static void bar30_failed(Bar30State *b, Bar30Status st, uint32_t now)
 
     if (b->consecutive_fail == BAR30_ABSENT_FAILURES)
     {
-        /* "Never worked" says check the wiring; "worked and stopped"
-         * says check the sensor. */
         SensorState next = (g_bar30_state == SENSOR_OK) ? SENSOR_FAULTED : SENSOR_ABSENT;
 
         g_bar30_state = next;
@@ -76,13 +61,10 @@ static void bar30_failed(Bar30State *b, Bar30Status st, uint32_t now)
 
     if ((b->consecutive_fail % BAR30_RECOVER_AFTER) == 0U)
     {
-        /* A slave reset mid-transfer can hold SDA low forever; clocking
-         * the bus frees it. Harmless if nothing is attached. */
         i2c1_bus_recover();
     }
 
-    /* A sensor that keeps failing is re-initialised when it answers
-     * again, in case it was swapped or power-cycled. */
+    // re-initialise when it comes back, in case it was swapped
     if (b->consecutive_fail >= BAR30_ABSENT_FAILURES)
     {
         b->initialised = 0U;
@@ -92,19 +74,13 @@ static void bar30_failed(Bar30State *b, Bar30Status st, uint32_t now)
                             ? BAR30_SLOW_RETRY_MS : BAR30_ABSENT_RETRY_MS);
 }
 
-/* One Bar30 step: init if needed, else take a reading. Returns true when
- * a new reading is in b->sample. */
+// Init if needed, else read. True when b->sample has a new reading.
 static bool bar30_step(Bar30State *b)
 {
     Bar30Status st;
 
     if (!b->initialised)
     {
-        /*
-         * Reset, PROM read and CRC check, retried until it works, so a
-         * sensor connected after boot is picked up and always gets its
-         * own calibration words.
-         */
         st = bar30_init();
 
         if (st == BAR30_OK)
@@ -225,8 +201,7 @@ void depth_task(void *argument)
             }
         }
 
-        /* BENCH_HIL: queued I2C bench work (MPU-6050 stress) runs here,
-         * between Bar30 transfers. */
+        // bench build only: MPU-6050 I2C test
         bench_i2c_service();
 
         vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(DEPTH_PERIOD_MS));

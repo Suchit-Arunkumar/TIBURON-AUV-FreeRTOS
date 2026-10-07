@@ -1,16 +1,6 @@
-// =============================================================================
-// control_loop.c — ROV 6-DOF Control Loop  (STM32 port)
-//
-// Ported from: ROV_6DOF_TUNING.ino  (RP2350 / arduino-pico)
-// Target:      STM32  (TIM7 fires at 50 Hz → dt = 0.02 s, always)
-//
-// External dependencies expected from the BSP:
-//   void pwm_set_us(uint8_t ch, uint16_t us)  — set ESC PWM channel (0-7)
-//   bool link_ok                              — set/cleared here; read by comms
-//
-// Timing comes from FreeRTOS (xTaskGetTickCount), not from a SysTick
-// counter — the kernel owns SysTick.
-// =============================================================================
+// 6-DOF control loop: PID per axis, thrust allocation, PWM, command
+// timeout. Ported from the Pico firmware (ROV_6DOF_TUNING.ino). Runs in
+// control_task, woken by TIM7 every 20 ms.
 
 #include "control_loop.h"
 #include <math.h>
@@ -29,31 +19,23 @@
 #include "bench.h"
 
 
-// =============================================================================
-// SECTION 1 — CONSTANTS
-// =============================================================================
 #define N_DOF           6
 #define N_THR           8
 
 #define PWM_MIN         1100
 #define PWM_MAX         1900
 #define PWM_NEUTRAL     1500
-#define PWM_RAMP_STEP   50          // us/tick at 50 Hz -> 2500 us/s, RECOVERY ONLY
+#define PWM_RAMP_STEP   50          // us per 20 ms tick = 2500 us/s, only while ramping
 
-#define CMD_TIMEOUT_MS  500u        // ms before failsafe triggers
+#define CMD_TIMEOUT_MS  500u
 
 #define THRUST_DEADZONE 0.02f
 
 
-// FreeRTOS handle used by TIM7 ISR to notify the control task
 TaskHandle_t controlTaskHandle = NULL;
 
-// =============================================================================
-// SECTION 2 — ALLOCATION MATRICES
-//
-// FORWARD  B  (6×8)   tau = B · T
-// INVERSE  B⁺ (8×6)   T  = B⁺ · U
-// =============================================================================
+// Allocation: tau = B * T (6 forces/torques from 8 thrusts), and its
+// pseudo-inverse T = B+ * U, computed offline.
 __attribute__((unused))
 static const float B_forward[N_DOF][N_THR] = {
     { 0.0f,     0.0f,     0.0f,     0.0f,    0.7070f, -0.7070f,  0.7070f,  0.7070f},
@@ -75,10 +57,8 @@ static const float B_pinv[N_THR][N_DOF] = {
     { 0.6925f,  0.6768f, -0.0007f,  0.0120f,  0.0363f,  2.9767f}
 };
 
-// =============================================================================
-// SECTION 3 — PID GAINS AND LIMITS
-//                          Surge   Sway    Heave   Roll    Pitch   Yaw
-// =============================================================================
+// Gains are zero until the vehicle is tuned in the water.
+//                                       Surge   Sway    Heave   Roll    Pitch   Yaw
 static const float kp[N_DOF]        = { 0.00f,  0.00f,  0.00f,  0.00f,  0.00f,  0.00f };
 static const float ki[N_DOF]        = { 0.00f,  0.00f,  0.00f,  0.00f,  0.00f,  0.00f };
 static const float kd[N_DOF]        = { 0.00f,  0.00f,  0.00f,  0.00f,  0.00f,  0.00f };
@@ -87,9 +67,6 @@ static const float FF_OFFSET[N_DOF] = { 0.0f,   0.0f,   0.0f,   0.0f,   0.0f,   
 static const float I_CLAMP[N_DOF]   = { 20.0f,  20.0f,  20.0f,  5.0f,   5.0f,   5.0f  };
 static const float U_MAX[N_DOF]     = { 80.0f,  80.0f,  80.0f,  20.0f,  20.0f,  20.0f };
 
-// =============================================================================
-// SECTION 4 — STATIC STATE VARIABLES
-// =============================================================================
 static float pose[N_DOF]     = {0};
 static float target[N_DOF]   = {0};
 static float errState[N_DOF] = {0};
@@ -99,82 +76,31 @@ static float U[N_DOF]        = {0};
 static float T_out[N_THR]    = {0};
 
 
-/*
- * VOLATILE POLICY (Phase 12 audit).
- *
- * Anything written in one execution context and read in another is
- * volatile. Note honestly what that does and does not buy here: every
- * cross-context read below goes through a non-inlined accessor in a
- * DIFFERENT translation unit, and LTO is off, so the compiler already
- * cannot cache these across the call. No live miscompilation was found.
- *
- * volatile is added because the guarantee should come from the
- * declaration rather than from the accident of where the function lives -
- * enabling -flto, or moving an accessor into a header as static inline,
- * would silently remove the protection otherwise.
- */
-
-/* Read by comms_task (telemetry) and spi_owner_task (OLED). */
+// volatile: written here, read by other tasks (telemetry, display, health
+// report).
 static volatile bool       g_armed       = false;
 
-/* control_task only: written by target_update, read by
- * checkCommandTimeout, both in the same call chain. Not cross-context. */
 static TickType_t          last_cmd_tick = 0;
 
 static int                 g_pwm_current[N_THR];
 
-/*
- * Failsafe latch and recovery counter.
- *
- * g_in_failsafe is sticky: once the link is declared lost it stays set
- * until CMD_RECOVERY_PACKETS consecutive CRC-valid packets have arrived,
- * none more than CMD_TIMEOUT_MS after the one before (checkCommandTimeout
- * resets the streak on a longer gap).
- * Without the latch, a single packet arriving inside the timeout window
- * would silently re-arm the vehicle from one frame.
- */
-/*
- * Both written only by control_task (target_update / enterFailsafe) and
- * by control_loop_init pre-scheduler; read by dummy_task's health report.
- *
- * The 3-packet streak deliberately lives HERE and not in comms_task.
- * comms_task parses packets and posts to commandQueue; it never touches
- * the streak. So there is no read-modify-write split across two
- * priorities - the increment, the compare and the reset all happen in
- * control_task.
- */
+// Failsafe latch. Stays set until CMD_RECOVERY_PACKETS valid packets have
+// arrived, none more than CMD_TIMEOUT_MS apart, so one stray packet can't
+// re-arm the vehicle.
 static volatile bool    g_in_failsafe    = true;
 static volatile uint8_t g_recovery_count = 0;
 
-/*
- * Slew limiter, active only while ramping out of neutral.
- *
- * Set whenever the outputs are forced to neutral - boot, or any failsafe
- * trip - and cleared on the first tick where no output needed clamping,
- * i.e. the moment the thrusters have caught up with what the PID is
- * asking for. From then on the controller has full authority and a step
- * command is a step.
- */
+// Slew limiter, on only while ramping up from neutral (boot, any disarm).
+// Turns off once every output has caught up with its command.
 static volatile bool g_ramping = true;
 
-/*
- * Allocation saturation, one bit per axis group, latched each tick by
- * computeAllocation(). bit0 vertical, bit1 horizontal, bit2 yaw.
- *
- * Set when the requested thrust vector could not be produced without
- * scaling, i.e. the controller is asking for more than the thrusters can
- * deliver. Telemetry carries it so the Pi can tell "the PID is wrong"
- * from "the PID is right and the vehicle is out of authority" - two
- * failures that look identical from pose error alone.
- */
+// bit0 vertical, bit1 horizontal, bit2 yaw: set when that group had to be
+// scaled down. Lets the Pi tell a wrong PID from a vehicle that is simply
+// out of thrust.
 static volatile uint8_t g_sat_flags = 0;
 
-/* Written by control_task; read by comms_task and spi_owner_task. */
 volatile bool link_ok = false;
 
-// =============================================================================
-// SECTION 5 — INTERNAL HELPERS
-// =============================================================================
 static inline float wrapAngle180(float angle)
 {
     while (angle >  180.0f) angle -= 360.0f;
@@ -192,9 +118,6 @@ static int thrust_to_pwm(float u)
         : PWM_NEUTRAL + (int)(u * (float)(PWM_NEUTRAL - PWM_MIN));
 }
 
-// =============================================================================
-// SECTION 6 — PUBLIC API
-// =============================================================================
 bool control_loop_in_failsafe(void)
 {
     return g_in_failsafe;
@@ -231,16 +154,9 @@ void control_loop_init(void)
     last_cmd_tick = 0;
 }
 
-/*
- * Forget everything the controller has accumulated and re-engage the
- * slew limiter. Used on every armed -> disarmed transition, whether the
- * Pi disarmed the vehicle or the failsafe did.
- *
- * Before this existed only the failsafe path did it. A disarm from the Pi
- * left g_ramping false and the integrator and last error intact, so the
- * next arm stepped the thrusters straight to the commanded value with a
- * stale integral and a derivative kick.
- */
+// Clear the integral, last error and output, and turn the ramp back on.
+// Runs on every disarm (Pi or failsafe) so re-arming never starts from a
+// stale integral or jumps straight to full thrust.
 static void reset_controller(void)
 {
     for (int i = 0; i < N_DOF; i++)
@@ -269,11 +185,7 @@ void control_loop_tick(void)
     applyPWM();
 }
 
-/*
- * Pose comes from the Pi's fused navigation state (current_x..yaw in each
- * CMD packet), exactly as on the competition Pico firmware. Sensor fusion
- * runs on the Pi; the onboard sensors are not inputs to the controller.
- */
+// The pose comes from the Pi's fused state in each command packet.
 void state_update(const float new_pose[N_DOF])
 {
     if (new_pose == NULL) return;
@@ -283,8 +195,7 @@ void state_update(const float new_pose[N_DOF])
 
 void target_update(const float new_target[N_DOF], bool arm_flag)
 {
-    /* Every CRC-valid packet refreshes the watchdog, whether or not it
-     * is allowed to move the setpoint yet. */
+    // Any valid packet resets the timeout, even during recovery.
     last_cmd_tick = xTaskGetTickCount();
 
     if (g_in_failsafe)
@@ -296,15 +207,9 @@ void target_update(const float new_target[N_DOF], bool arm_flag)
 
         if (g_recovery_count < CMD_RECOVERY_PACKETS)
         {
-            /*
-             * Streak incomplete. Count it and nothing else - no setpoint,
-             * no arming. Thrusters stay at neutral.
-             */
-            return;
+            return;     // still recovering: thrusters stay at neutral
         }
 
-        /* Streak complete: the link is real. Leave failsafe and take
-         * this packet's setpoint - never a cached pre-loss one. */
         g_in_failsafe = false;
     }
 
@@ -313,9 +218,6 @@ void target_update(const float new_target[N_DOF], bool arm_flag)
     link_ok       = true;
 }
 
-// =============================================================================
-// SECTION 7 — computePID()
-// =============================================================================
 void computePID(float dt)
 {
     if (dt <= 0.0f) return;
@@ -345,9 +247,8 @@ void computePID(float dt)
     }
 }
 
-// =============================================================================
-// SECTION 8 — computeAllocation()
-// =============================================================================
+// Thrusters 0-3 are vertical, 4-7 horizontal. Each group is scaled down on
+// its own if any thruster in it would exceed full thrust.
 void computeAllocation(void)
 {
     float T_trans[N_THR] = {0};
@@ -395,27 +296,19 @@ void computeAllocation(void)
     }
 }
 
-// =============================================================================
-// SECTION 9 — applyPWM()
-// =============================================================================
 void applyPWM(void)
 {
-    /* Set if ANY channel had to be clamped this tick. */
     bool clamped_any = false;
 
     for (int i = 0; i < N_THR; i++) {
         if (!g_armed) {
             g_pwm_current[i] = PWM_NEUTRAL;
         } else {
-            float thrust   = (i == 0) ? -T_out[i] : T_out[i];
+            float thrust   = (i == 0) ? -T_out[i] : T_out[i];   // thruster 1 inverted, as in the Pico firmware
             int target_pwm = thrust_to_pwm(thrust);
 
             if (g_ramping) {
-                /*
-                 * Recovery ramp ONLY. Walk towards the commanded value at
-                 * PWM_RAMP_STEP per tick, so the thrusters come up from
-                 * neutral smoothly after a failsafe trip or at boot.
-                 */
+                // Walk towards the command at PWM_RAMP_STEP per tick.
                 int delta = target_pwm - g_pwm_current[i];
 
                 if (delta > PWM_RAMP_STEP) {
@@ -428,14 +321,9 @@ void applyPWM(void)
 
                 g_pwm_current[i] += delta;
             } else {
-                /*
-                 * Normal operation: the PID gets full authority.
-                 *
-                 * This limiter used to run on EVERY armed tick, capping
-                 * the loop at 6.25% of full range per tick - a full-scale
-                 * reversal took 320 ms. That is invisible from the
-                 * outside and presents as badly tuned gains.
-                 */
+                // Full authority. (An always-on limiter here used to cap
+                // the loop at 6% of range per tick, which looks exactly
+                // like badly tuned gains.)
                 g_pwm_current[i] = target_pwm;
             }
 
@@ -446,20 +334,12 @@ void applyPWM(void)
         pwm_set_us((uint8_t)i, (uint16_t)g_pwm_current[i]);
     }
 
-    /*
-     * The ramp is complete once a whole pass needed no clamping - every
-     * thruster has caught up with its commanded value. Only meaningful
-     * while armed; disarming sets g_ramping again (reset_controller), so
-     * the next arming always ramps.
-     */
+    // Ramp done once a whole tick needed no limiting.
     if (g_ramping && g_armed && !clamped_any) {
         g_ramping = false;
     }
 }
 
-// =============================================================================
-// SECTION 10 — enterFailsafe()
-// =============================================================================
 void enterFailsafe(void)
 {
     g_armed = false;
@@ -468,37 +348,19 @@ void enterFailsafe(void)
     g_in_failsafe    = true;
     g_recovery_count = 0;
 
-    /* Outputs are about to be forced to neutral, so the next arming must
-     * walk them back up rather than step. */
     reset_controller();
 
-    /*
-     * Discard the setpoint as well as the integrator state.
-     *
-     * This is the rule that matters: a stale packet arriving after a long
-     * dropout must not re-apply the throttle the vehicle was carrying
-     * when the link died. With target zeroed, recovery starts from a
-     * stationary command, and applyPWM's PWM_RAMP_STEP slew then walks
-     * the outputs up from PWM_NEUTRAL at 2500 us/s rather than stepping.
-     */
+    // Clear the setpoint too, so a stale packet after the dropout can't
+    // bring back the thrust the vehicle had when the link died.
     for (int i = 0; i < N_DOF; i++)
         target[i] = 0.0f;
 }
 
-// =============================================================================
-// SECTION 11 — checkCommandTimeout()
-// =============================================================================
+// Runs in control_task, not comms_task, so it still fires if comms_task
+// hangs. last_cmd_tick == 0 means no packet has ever arrived; the vehicle
+// starts in failsafe anyway.
 void checkCommandTimeout(void)
 {
-    /*
-     * Evaluated from control_task every 20 ms, so it cannot be starved by
-     * a hung comms_task: the check lives on the deadline task, not on the
-     * task that parses packets.
-     *
-     * The guard on last_cmd_tick keeps a board that has never received a
-     * packet out of a permanent failsafe-trip loop; g_in_failsafe already
-     * starts true, so the vehicle is disarmed either way.
-     */
     TickType_t since = xTaskGetTickCount() - last_cmd_tick;
 
     if (last_cmd_tick != 0 && since > pdMS_TO_TICKS(CMD_TIMEOUT_MS))
@@ -510,15 +372,8 @@ void checkCommandTimeout(void)
         }
         else if (g_recovery_count != 0U)
         {
-            /*
-             * A gap longer than the timeout breaks the recovery streak.
-             *
-             * Without this, "three consecutive packets" was really "three
-             * packets since the dropout, at any spacing": two packets, ten
-             * seconds of silence, one more, and the vehicle re-armed off a
-             * link that had been dead for most of that time. The streak now
-             * has to arrive with no gap a healthy link would not have.
-             */
+            // A gap during recovery restarts the count: the 3 packets
+            // must be consecutive, not just 3 since the dropout.
             g_recovery_count = 0U;
         }
     }
@@ -573,14 +428,9 @@ bool control_loop_get_armed(void)
     return g_armed;
 }
 
-/*
- * The individual getters above are fine on their own, but comms_task
- * (priority 5) calling four of them in a row can be preempted by
- * control_task (priority 7) part-way through, and the telemetry packet
- * then carries pose from one tick and PWM from the next. Copying
- * everything inside one short critical section rules that out. The copy
- * is about 80 bytes, well under a microsecond with interrupts masked.
- */
+// Copy everything telemetry needs in one critical section. Calling the
+// getters one by one from comms_task could be interrupted by the control
+// task between them, mixing values from two ticks.
 void control_loop_snapshot(ControlSnapshot *out)
 {
     if (out == NULL)
@@ -610,25 +460,8 @@ bool control_loop_get_link(void)
     return link_ok;
 }
 
-// =============================================================================
-// FreeRTOS CONTROL TASK
-// =============================================================================
-/*
- * P8: log every LOG_DECIMATION-th control tick.
- *
- * Control runs at 50 Hz; 50/10 = 5 Hz of records. Records are batched
- * into 512-byte blocks by logging_task, so this rate no longer implies
- * one SD block program per record.
- */
-#define LOG_DECIMATION   10U
+#define LOG_DECIMATION   10U    // 50 Hz / 10 = 5 log records per second
 
-/*
- * Records dropped because logQueue was full.
- *
- * Non-zero means the logging pipeline could not keep up - almost
- * certainly the bus owner stuck in a long SD program cycle. Reported
- * over the console rather than inferred from gaps in the data.
- */
 static volatile uint32_t log_drop_count = 0;
 
 uint32_t control_log_drops(void)
@@ -638,24 +471,14 @@ uint32_t control_log_drops(void)
 
 void control_task(void *argument)
 {
-    // This task doesn't use its argument.
 	(void)argument;
 
 	static uint32_t log_tick_count = 0;
 
-	/*
-	 * B6: start the 50 Hz tick here, not in main.
-	 *
-	 * TIM7's ISR notifies this task and calls portYIELD_FROM_ISR. Both
-	 * require the scheduler to be running and this handle to be
-	 * populated. Starting the timer from main left a window in which
-	 * neither was true. By the time this line executes, the scheduler has
-	 * started and controlTaskHandle is set, so the window is closed by
-	 * construction rather than by timing luck.
-	 */
+	// Start the 50 Hz timer from here, once this task's handle exists for
+	// the TIM7 interrupt to notify.
 	tim7_init();
 
-    // Run forever because FreeRTOS tasks are persistent execution contexts.
 	for (;;)
 	{
 	    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
@@ -663,13 +486,8 @@ void control_task(void *argument)
 
 	    CommandPayload cmd;
 
-	    /*
-	     * Drain the queue, oldest first, so the setpoint this tick acts on
-	     * is the newest one. Taking one per tick meant that a Pi sending
-	     * faster than 50 Hz filled the queue and the vehicle ran up to four
-	     * commands (80 ms) behind. Every packet still goes through
-	     * target_update, so each one counts towards failsafe recovery.
-	     */
+	    // Empty the queue so this tick uses the newest command. Every
+	    // packet still counts towards failsafe recovery.
 	    while (xQueueReceive(commandQueue, &cmd, 0) == pdPASS)
 	    {
 	        float new_pose[6] = {
@@ -697,35 +515,20 @@ void control_task(void *argument)
 	    }
 
 	    control_loop_tick();
-	    bench_after_control_tick();   /* PWM signature / hang: BENCH_HIL only */
+	    bench_after_control_tick();
 
-	    /*
-	     * Refresh the watchdog only here, and only after a completed
-	     * tick. If this loop stops running, the board resets and the
-	     * ESCs lose their signal — which is what we want — rather than
-	     * staying alive with the last PWM values latched.
-	     *
-	     * Compiles to nothing in Debug builds (see iwdg.h).
-	     */
+	    // Only this task refreshes the watchdog: if the control loop stops,
+	    // the board resets and the ESCs lose their signal.
 	    iwdg_kick();
 
-	    /* Tell Comms Task that a telemetry update is ready */
 	    xTaskNotify(
 	        commsTaskHandle,
 	        COMMS_NOTIFY_TELEMETRY,
 	        eSetBits
 	    );
 
-	    /*
-	     * Flush the staging block on the armed->disarmed edge.
-	     *
-	     * enterFailsafe() clears g_armed, so a comms timeout produces
-	     * this edge too and both cases are covered by one check. The
-	     * records straddling a failsafe trip are the ones most worth
-	     * having on the card, and without this they would sit in RAM
-	     * until the block happened to fill - up to 2.4 s later, or
-	     * never, if the board is then power-cycled.
-	     */
+	    // On a disarm (including a failsafe), flush the log block so the
+	    // records around it reach the card.
 	    {
 	        static uint8_t prev_armed = 0;
 	        uint8_t now_armed = control_loop_get_armed() ? 1U : 0U;
@@ -737,7 +540,6 @@ void control_task(void *argument)
 	            flush_item.kind = LOG_ITEM_FLUSH;
 	            memset(&flush_item.record, 0, sizeof(flush_item.record));
 
-	            /* Zero block time here too - see below. */
 	            if (xQueueSend(logQueue, &flush_item, 0) != pdPASS)
 	            {
 	                log_drop_count++;
@@ -747,16 +549,8 @@ void control_task(void *argument)
 	        prev_armed = now_armed;
 	    }
 
-	    /*
-	     * P8: forward a decimated log record to logging_task.
-	     *
-	     * xQueueSend with a ZERO block time, always. control_task must
-	     * never wait on the logging pipeline: a full logQueue means the
-	     * bus owner is mid SD program cycle, which can legitimately last
-	     * 250 ms, and blocking here would miss twelve 50 Hz deadlines.
-	     * Dropping the record is the correct trade - and it is counted,
-	     * not silent.
-	     */
+	    // Zero timeout: an SD card busy for 250 ms costs log records, never
+	    // a control tick.
 	    log_tick_count++;
 
 	    if (log_tick_count >= LOG_DECIMATION)
@@ -785,10 +579,7 @@ void control_task(void *argument)
 	            record->link_ok      = control_loop_get_link()  ? 1 : 0;
 	            record->crc16        = 0;
 
-	            /*
-	             * CRC-16-CCITT over the record excluding the field itself,
-	             * which is why crc16 is last in the struct.
-	             */
+	            // CRC over everything before the CRC field (it is last).
 	            record->crc16 = crc16_ccitt(
 	                (const uint8_t *)record,
 	                sizeof(LogRecord) - sizeof(record->crc16)

@@ -1,662 +1,597 @@
-# TIBURON AUV — FreeRTOS Firmware
+# TIBURON AUV — FreeRTOS firmware (STM32F446RE)
 
-Register-level FreeRTOS firmware for an 8-thruster AUV control node on an
-STM32F446RE (NUCLEO-F446RE). No HAL and no CubeMX-generated init: every
-peripheral driver is hand-written against the reference manual. It began as a
-migration of [Nucleo_AUV_Bare_Metal](https://github.com/Suchit-Arunkumar/Nucleo_AUV_Bare_Metal)
-that changed the *scheduling and synchronisation* around the same drivers, then
-hardened them.
+Firmware for the low-level controller of an 8-thruster AUV, on a NUCLEO-F446RE.
+Register-level drivers (no HAL), FreeRTOS on top.
 
-**Verified on a NUCLEO-F446RE**: all 19 hardware-in-the-loop tests pass (18 in
-the final scripted run, plus all 8 PWM outputs measured exact), including the vehicle's real Pi-link path (USART1, DMA,
-IDLE interrupt) in loopback. Measured: 1.87 µs worst control-tick jitter under
-load, a failsafe that trips 520 ms after the last command even with the comms
-task suspended, and 0 CRC errors over a 60 s soak. Bring-up found three
-defects, and the bench reproduced a DMA data-loss bug that analysis had only
-flagged as untested. Results are in
-[Hardware-in-the-loop verification](#14-hardware-in-the-loop-verification) and
-[Key figures](#15-key-figures).
+The STM32 is the vehicle's sensor hub and thruster controller:
 
-**Scope.** The STM32 control path for Team Tiburon's AUV (SAUVC 2026),
-developed and verified on a bench rig; not yet integrated on the vehicle. At
-SAUVC 2026 the VN-200 IMU and the Wayfinder DVL ran on the Raspberry Pi, and
-the team's RP2350 (Pico 2) firmware drove all 8 ESCs and thrusters and ran the
-Bar30 depth sensor, SD logging and a TFT display. This firmware speaks that
-firmware's 62-byte frame and CRC-16 unchanged. The control law in `control_loop.c` (PID, 6×8 thrust
-allocation, command-timeout failsafe) is ported from that firmware's tuning
-sketch. The STM32 drivers here for the VN-200, DVL, Bar30, SD card and OLED are
-separate register-level implementations, exercised on the bench only with
-those parts absent. The PID gains are untuned (all zero) until the vehicle is
-in water.
+- reads the IMU (VN-200, or a BNO085 as backup), the depth sensor (Bar30, or an
+  analog pressure sensor as backup) and the Wayfinder DVL;
+- sends all of it to the Raspberry Pi, which does navigation and sensor fusion;
+- takes setpoints and the fused pose back from the Pi, runs a 6-DOF PID at 50 Hz,
+  maps it to 8 thrusters, and drives the ESCs;
+- stops the thrusters on its own if the Pi goes quiet, if the firmware hangs,
+  or if the CPU faults.
+
+This started as a bare-metal superloop
+([Nucleo_AUV_Bare_Metal](https://github.com/Suchit-Arunkumar/Nucleo_AUV_Bare_Metal))
+and was moved onto FreeRTOS, then tested on the bench.
 
 ---
 
 ## Contents
 
-1. [The failsafe is the architecture](#1-the-failsafe-is-the-architecture)
-2. [At a glance](#2-at-a-glance)
-3. [Tasks and priorities](#3-tasks-and-priorities)
-4. [SPI arbitration: bus owner, not mutex](#4-spi-arbitration-bus-owner-not-mutex)
-5. [Logging: batching, and what it costs](#5-logging-batching-and-what-it-costs)
-6. [Queue design](#6-queue-design)
-7. [Interrupts](#7-interrupts)
-8. [Memory](#8-memory)
-9. [Pin map](#9-pin-map)
-10. [Clock](#10-clock)
-11. [Two decisions worth the words](#11-two-decisions-worth-the-words)
-12. [Defects found](#12-defects-found)
-13. [Bare-metal → RTOS: what changed](#13-bare-metal--rtos-what-changed)
-14. [Hardware-in-the-loop verification](#14-hardware-in-the-loop-verification)
-15. [Key figures](#15-key-figures)
-16. [What is not verified](#16-what-is-not-verified)
-17. [Building](#17-building)
-18. [Console](#18-console)
+1. [What has been tested, and how](#1-what-has-been-tested-and-how)
+2. [Hardware and pins](#2-hardware-and-pins)
+3. [How the firmware is organised](#3-how-the-firmware-is-organised)
+4. [Tasks and priorities](#4-tasks-and-priorities)
+5. [How tasks talk to each other](#5-how-tasks-talk-to-each-other)
+6. [Interrupts and receiving with DMA](#6-interrupts-and-receiving-with-dma)
+7. [Sensors](#7-sensors)
+8. [Choosing between two sensors](#8-choosing-between-two-sensors)
+9. [The Pi link protocol](#9-the-pi-link-protocol)
+10. [Control loop and failsafes](#10-control-loop-and-failsafes)
+11. [SPI bus, SD logging and display](#11-spi-bus-sd-logging-and-display)
+12. [Memory, stacks and timing](#12-memory-stacks-and-timing)
+13. [Bugs found and fixed](#13-bugs-found-and-fixed)
+14. [Building and testing](#14-building-and-testing)
+15. [Not done yet](#15-not-done-yet)
+16. [Design decisions in one line each](#16-design-decisions-in-one-line-each)
 
 ---
 
-## 1. The failsafe is the architecture
+## 1. What has been tested, and how
 
-If a comms link to a submerged vehicle drops, the thrusters must stop. The obvious implementation puts that check in the task that handles comms, and that is exactly where it must not be: the failure that kills the link and the failure that hangs the comms task overlap a great deal.
+Three levels of evidence, kept separate on purpose:
 
-**The 500 ms command timeout is evaluated inside `control_task`, on every 20 ms TIM7 tick, and depends on nothing else in the system.**
+| Level | What it covers |
+|---|---|
+| **On hardware** (bench, 5 Oct 2026, [`tools/hil/hil_rtos_report.md`](tools/hil/hil_rtos_report.md)) | Clock tree, 50 Hz control timing and jitter, Pi link over the real UART (loopback), resync through junk, bad-CRC rejection, the command-timeout failsafe (including with the comms task suspended), 3-packet recovery, the DMA wrap bug and its fix, I²C reads under preemption, a 60 s soak, stack high-water marks, the fault latch, the watchdog. 18 of 19 tests passed; the PWM capture test was skipped (no jumper fitted). |
+| **On the PC, against the datasheets** ([`tests/host`](tests/host)) | VN-200 packet parsing and CRC, Bar30 CRC-4 and compensation (against the datasheet's worked example), DVL frame parsing, analog-sensor conversion, and the sensor-switching logic. 211 checks. |
+| **Built, not yet run** | Everything written after that bench run: the IMU and depth tasks, the BNO085, Bar30 and analog drivers on this board, the new packets, DMA transmit, the fault-handler change. Each is marked `UNTESTED` in its source until it has been run. |
 
-```
-TIM7 (hardware, 50 Hz)  ──notify──▶  control_task ──▶ checkCommandTimeout()
-                                          │                    │
-                                          │              reads last_cmd_tick
-                                          ▼                    ▼
-                                    all 8 thrusters ◀── enterFailsafe()
-```
+The BNO085, Bar30 and analog sensor have all been run on the team's Pico
+firmware, so the sensors, wiring and settings are known good. The STM32 drivers
+for them are new code and still need their own bench run. The VN-200 and DVL
+have not been connected to anything yet.
 
-It reads one timestamp. It does not read a queue, does not wait on a notification, and does not call into `comms_task`. So the failsafe still fires on schedule when:
-
-- `comms_task` is hung, starved, crashed, or was never created
-- the USART1 ISR has stopped firing entirely
-- `commandQueue` is full and every command is being dropped
-- the Pi is powered but sending garbage that fails CRC
-
-**Measured on hardware:** the failsafe tripped 520 ms after the last valid command in every run: 3 / 3 with the link simply going quiet, once on a stream of bad-CRC frames, and once **with `comms_task` suspended**. 520 ms is the 500 ms timeout detected on the next 20 ms tick, exactly as designed.
-
-The single point of failure is TIM7 itself. If TIM7 stops, `control_task` stops refreshing the watchdog, and the board resets within ~1 s, which drives the ESCs to no-signal. The failure mode of the failsafe is therefore *also* a failsafe. **Measured:** a deliberately hung `control_task` reset the board 3 / 3 times, in 1,055–1,126 ms, with `RCC_CSR` reporting `IWDG` on the next boot.
-
-**Recovery is deliberately asymmetric.** Going into failsafe takes one missed deadline. Coming out takes **three consecutive CRC-valid packets, none more than 500 ms after the one before**, because one packet after a dropout is not evidence of a restored link; it may be the only one that got through. `enterFailsafe()` also zeroes the setpoint and the integrator state, so a stale packet arriving after a long dropout **cannot re-apply the throttle the vehicle was carrying when the link died**. Recovery starts from a stationary command, and the slew limiter walks the outputs up from neutral at 2500 µs/s.
-
-The "consecutive" part was not true until the bench test was written: the counter accepted three packets at any spacing, so two packets, ten seconds of silence and one more would re-arm. `checkCommandTimeout()` now resets the streak on a gap longer than the timeout. **Measured:** packets 1, 2, 3 re-arm; packets 1, 2, a 1.2 s gap, then 3 leave the vehicle in failsafe with the streak back at 1.
+**The PID gains are zero.** The loop runs end to end (error, integral,
+derivative, saturation, allocation, PWM) but outputs zero until it is tuned in
+the water.
 
 ---
 
-## 2. At a glance
+## 2. Hardware and pins
 
 | | |
 |---|---|
-| **MCU** | STM32F446RE @ 180 MHz: HSE bypass (no crystal fitted), PLL M=8 N=360 P=2, over-drive enabled |
-| **RTOS** | FreeRTOS V11.1.0+, `heap_4`, GCC `ARM_CM4F` port, hard-float `fpv4-sp-d16` |
-| **Tasks** | 8 application tasks over 6 priority levels; 9 tasks over 7 levels at runtime with the idle task |
-| **Code** | 5,278 lines of C (cloc; 2,943 more of comments), kernel and CMSIS excluded |
-| **Flash** | 34,916 B, 6.7 % of 512 KiB (vehicle build) |
-| **RAM** | 29,736 B static, 22.7 % of 128 KiB (vehicle build) |
-| **Heap free** | 9,448 B of 22,528 B: measured, and equal to the minimum-ever-free |
-| **Link** | 62-byte frames, CRC-16/IBM-3740, USART1 115,200 baud, DMA RX with IDLE and half/full-transfer draining |
-| **Verified** | 19 / 19 HIL tests on a NUCLEO-F446RE ([§14](#14-hardware-in-the-loop-verification)) |
-| **Toolchain** | `arm-none-eabi-gcc` at `-O2`, 0 warnings in both builds |
+| MCU | STM32F446RE, 180 MHz (8 MHz HSE bypass from the ST-LINK, PLL, over-drive on) |
+| RTOS | FreeRTOS, `heap_4`, ARM_CM4F port, single-precision FPU |
+| Thrusters | 8 × Blue Robotics T200 / Basic ESC, 1100–1900 µs, 1500 µs neutral, 50 Hz frame |
 
----
-
-## 3. Tasks and priorities
-
-**8 application tasks across 6 priority levels.** Stated separately because it is a real distinction: FreeRTOS adds an idle task the application never mentions, so the *runtime* figure is **9 tasks across 7 levels**.
-
-| Prio | Task | Stack | Trigger | Role | Measured stack use | CPU (loaded) |
-|---|---|---|---|---|---|---|
-| 7 | `control_task` | 1024 B | TIM7 notify, 50 Hz | PID, allocation, PWM, **failsafe**, IWDG refresh | 464 B | 0.3 % |
-| 5 | `comms_task` | 1024 B | USART1 IDLE / DMA notify | CRC-16 packet parse, telemetry build and send | 768 B | 54.4 % |
-| 4 | `vn200_task` | 1024 B | USART3 DMA + IDLE | IMU parser | 664 B | 0 % |
-| 4 | `dvl_task` | 1024 B | UART4 DMA + IDLE | Doppler velocity log parser | 760 B | 0 % |
-| 4 | `bar30_task` | 1024 B | 20 ms periodic, backs off when absent | Depth sensor (I²C); owns I2C1 | 736 B | 0 % |
-| 3 | `spi_owner_task` | 1024 B | Queue, 500 ms timeout | **Sole owner of SPI2**: OLED + SD | 576 B | 0.3 % |
-| 2 | `logging_task` | 1024 B | Queue from control | Batches records into 512 B blocks | 252 B | 0 % |
-| 1 | `dummy_task` | 1536 B | Queue, 50 ms timeout | Heartbeat, **sole stdio owner**, on-demand reports | 928 B | 0.1 % |
-| 0 | `IDLE` | 512 B | — | Kernel | — | 44.6 % |
-
-Stack use is the high-water mark after every error path the bench can reach had run (failsafe, junk, bad CRC, sensor absence, reports). CPU is from FreeRTOS run-time stats over a 60 s soak with commands in and telemetry out at 50 Hz. Both are from the bench build, which runs extra code in `comms_task`, `bar30_task` and `dummy_task`.
-
-**Where the CPU goes.** `comms_task` takes 27.0 % of the CPU with the link idle and 54.4 % under load, almost all of it busy-waiting on `TXE` while it sends 62-byte frames at 115,200 baud (5.4 ms each, one or two per tick). It is preemptible and sits below `control_task`, so it costs no deadline, but it is the obvious next optimisation: a DMA transmit path would return that time to idle.
-
-`configUSE_TIMERS` is **0**. `xTimerCreate` is called zero times, so the timer-service daemon was pure cost: 816 B of heap and a pinned priority 2 that collided with `logging_task`. Turning it off freed both.
-
-Three tasks share priority 4 with `configUSE_TIME_SLICING 1`, so they round-robin on each 1 ms tick. None can monopolise; each may wait up to 2 ms for its turn, against budgets of ≥10 ms.
-
-> **What "implemented" means for the controller.** The control loop's
-> *structure* is complete and runs end to end: error, clamped integral,
-> derivative, feedforward, per-axis saturation, and thrust allocation
-> through a pre-computed pseudo-inverse. Pose comes from the Pi's fused
-> navigation state in each command packet, as on the competition Pico
-> firmware. **The PID gains are all zero**, so the loop currently computes
-> an identically zero command; tuning needs the vehicle in water. The
-> whole task body runs in 17 µs on average at idle and 57 µs under load
-> (109 µs worst), measured.
-
-**LD2 is a liveness indicator at the lowest priority.** That is a deliberate trade: the LED proves the *whole* schedule is running, not just the top of it. The consequence: **a starved system and a crashed system look identical from the LED alone.** If the heartbeat stops, the console (`h`) and the fault latch are what distinguish them.
-
----
-
-## 4. SPI arbitration: bus owner, not mutex
-
-> The timing figures in this section are **computed** from the clock tree and the SD specification. The OLED and SD card were not fitted on the bench, so none of them has been measured.
-
-Both the SSD1306 OLED and the SD card sit on SPI2. Neither driver has any locking. The choice was a mutex or a single owning task, and it was made by arithmetic.
-
-### The numbers
-
-SPI2 is on APB1, so `BR[2:0]` divides **PCLK1 = 45 MHz**:
-
-| BR | ÷ | f_SCK | Used for |
-|---|---|---|---|
-| 001 | 4 | 11.250 MHz | — (available; see below) |
-| 010 | 8 | **5.625 MHz** | **OLED** and **SD data** |
-| 110 | 128 | **351.563 kHz** | **SD identification** |
-
-Two divisors land in the SD spec's mandatory 100–400 kHz init window — ÷128 (351.6 kHz) and ÷256 (175.8 kHz). ÷128 is chosen for being faster, **not** for being unique. The SSD1306 tops out near 10 MHz (100 ns min cycle), so ÷4 is out for the OLED. SD data starts at ÷8 rather than ÷4 because 11.25 MHz is optimistic over Nucleo jumper wiring with no controlled impedance — `SPI_BR_SD_DATA` is one named constant to raise once the card reads reliably.
-
-Per-byte cost is 8/f_SCK plus **≈0.40 µs** of polled driver overhead, derived from `spi_transmit`'s four APB1 register accesses at ~0.11 µs each across the HCLK-180/PCLK1-45 bridge. *That 0.40 µs is computed, not measured, and it propagates into every figure below.*
-
-| | Bus time | Busy | Total | vs 20 ms budget |
-|---|---|---|---|---|
-| OLED full frame (1030 B) | 1.88 ms | — | **1.88 ms** | 9.4 % |
-| SD block write, typical | 0.97 ms | 2.5 ms | **3.5 ms** | 17 % |
-| SD block write, **worst case** | 0.97 ms | **250 ms** | **251 ms** | **12.5 control periods** |
-
-250 ms is the SD Physical Layer Simplified Specification's host timeout for a single-block write (SDHC/SDXC; for SDSC it is derived from TAAC/NSAC/R2W_FACTOR in the CSD and capped at the same figure).
-
-### The decision
-
-**Bus owner.** But not for the reason the arithmetic first suggests — 1.88 ms vs 251 ms is a latency argument, and *both* schemes serialise on the same single bus, so both suffer it identically.
-
-What actually decides it: **`control_task` never touches SPI.** Priority inversion against the 50 Hz deadline is therefore impossible under either scheme, which removes the mutex's only real advantage — priority inheritance. What remains is that the bus needs three different SCK rates. Under a mutex, every acquirer becomes responsible for programming `CR1.BR` correctly on every acquisition, and a miss fails **silently and intermittently** — an SSD1306 driven at 11.25 MHz will often work, then not, depending on wiring. As a bus owner, BR is one task's private state, set from the request type it just dequeued. Exclusion becomes structural: no other task has a code path that reaches `spi_transmit`.
-
-### What would reverse this decision
-
-Kept verbatim, because these are the conditions under which the above stops being true:
-
-1. **If any task at priority ≥ 5 needed the bus directly.** This is the decisive one and it inverts the whole argument. A priority-3 owner serving a priority-7 requester through a queue is **unbounded priority inversion with no inheritance whatsoever** — the owner can be preempted by everything at 4, 5 and 6 while holding a 250 ms transaction. A mutex with inheritance would be strictly better. *If the control loop ever needs a synchronous SD config-block read, switch to a mutex.*
-2. **If worst-case single-operation time dropped below ~one control period (20 ms) AND more than one task needed the bus.** At ~5 ms held by a priority-2 task with inheritance, the dedicated task's 1 KB stack + 84 B TCB + queue hop stops paying for itself.
-3. **If BR never had to change** — one device, or two sharing a rate. That single fact is carrying most of the bus-owner case; remove it and the two schemes are near-equivalent, and the mutex is cheaper.
-
-### Why priority 3 specifically
-
-The owner must sit **strictly above every task that sends it requests** (`logging_task` at 2), so a requester cannot preempt the owner and pile up more work while a transaction is in flight. It must sit **strictly below every task with a deadline** (control 7, comms 5, sensors 4), so a 250 ms program cycle is preemptible by all of them. Priority 3 is the unique slot satisfying both.
-
-The OLED is a request **type** (`SPI_REQ_OLED_FRAME`), not the task's identity. Adding a third device to the bus is a new enum value and a `switch` case, not a restructure.
-
----
-
-## 5. Logging: batching, and what it costs
-
-> Computed, like §4: the logging pipeline ran on the bench, but with no SD card fitted every block write failed and was counted.
-
-`control_task` builds a `LogRecord` (40 B) every 10th tick — 5 Hz — and posts it with **zero block time**, counting drops. It never waits on the logging pipeline: a full queue means the bus owner is mid-program-cycle, which can legitimately last 250 ms, and blocking would miss twelve deadlines.
-
-Writing each 40 B record as its own 512 B block meant **12.8× write amplification** and one full program/erase cycle per record. Records now accumulate into a 512 B staging block — a 16 B self-describing header plus 12 records — emitted when full (~2.4 s) or on an explicit flush.
-
-| | Before | After |
+| Function | Peripheral | Pins |
 |---|---|---|
-| Bytes programmed | 2560 B/s | **213 B/s** (12×) |
-| Write amplification | 12.8× | **1.067×** |
-| Bus duty, typical | 1.9 % | **0.53 %** |
-| Bus duty, all-worst-case | 1250 ms/s — **saturated** | **105 ms/s = 10.5 %** |
-| Exposures to the 250 ms worst case | 5/s | **0.42/s** |
+| Debug console | USART2 (ST-LINK virtual COM), 115200 | PA2 / PA3 |
+| Raspberry Pi | USART1, 115200, RX DMA2 S2, TX DMA2 S7 | PA9 TX / PA10 RX |
+| VN-200 | USART3, 115200, RX DMA1 S1 | PC10 / PC11 |
+| Wayfinder DVL (via RS-232 converter) | UART4, 115200, RX DMA1 S2 | PA0 / PA1 |
+| Bar30 (0x76) and BNO085 (0x4A/0x4B) | I2C1, 400 kHz | PB8 SCL / PB9 SDA |
+| Analog pressure sensor | ADC1 channel 4, through a 2:1 divider | PA4 |
+| SD card + display | SPI2 | PB13 / PB14 / PB15, SD CS PC4 |
+| Display control | GPIO | CS PC5, DC PC0, RST PC1 |
+| Thrusters 1–4 | TIM3 CH1–4 | PB4, PB5, PB0, PB1 |
+| Thrusters 5–8 | TIM8 CH1–4 | PC6, PC7, PC8, PC9 |
+| Heartbeat LED | GPIO | PA5 |
 
-> **The cost, stated plainly: batching loses up to 2.4 s of records on an unexpected power cut** — and that is the most interesting 2.4 seconds of any run. Flush-on-disarm and flush-on-failsafe cover the graceful cases, and both are triggered by the armed→disarmed edge inside `control_task`. Nothing covers a hard power loss. If that matters more than SD endurance, reduce `LOG_RECORDS_PER_BLOCK`.
+Pin details that broke things before they were caught:
 
-`SpiRequest` carries the whole 512 B block **by value**. That costs 1120 B of heap for a depth-2 queue and one ~3 µs memcpy per block. The alternative — passing a pointer into a shared staging buffer — saves ~500 B against 8704 free and buys a buffer-ownership handoff between two tasks, which is the exact bug class that corrupts log blocks under load. The bytes are the cheaper thing to spend.
-
----
-
-## 6. Queue design
-
-| Queue | Depth | Item | Heap | Full policy | Counter | Measured drops |
-|---|---|---|---|---|---|---|
-| `commandQueue` | 4 | 56 B | 304 B | 1 ms block, then drop | `comms_cmd_drops()` | 0 in a 60 s soak at 50 Hz |
-| `dvlQueue` | 1 | 76 B | 160 B | `xQueueOverwrite`: newest wins | — | — |
-| `vn200Queue` | 1 | 40 B | 120 B | `xQueueOverwrite` | — | — |
-| `bar30Queue` | 1 | 4 B | 88 B | `xQueueOverwrite` | — | — |
-| `logQueue` | 8 | 41 B | 408 B | **zero block**, drop | `control_log_drops()` | — |
-| `spiRequestQueue` | 2 | 520 B | 1120 B | 500 ms block, then drop | `logging_spi_post_drops()` | — |
-| `consoleQueue` | 8 | 80 B | 720 B | **zero block**, drop | `console_dropped()` | 0 over a full HIL run |
-
-Depth-1 queues use `xQueueOverwrite` because the consumer only ever wants the latest measurement, never a backlog. Absorption: `logQueue` holds 1.6 s of records; `spiRequestQueue` holds 4.8 s of block production.
-
-**Every drop site has a counter**, including the UART receive ring buffer (`rx_dropped_count()`), whose silent overflow used to look exactly like a CRC failure. Measured: 0 ring-buffer drops over 118,978 bytes received.
-
-**The stdio owner writes its own lines directly.** `dummy_task` is the only reader of `consoleQueue`, so lines it posted there itself could not be printed until it returned to its loop, and the 13-line `h` and `s` reports lost their last 5 lines to the depth-8 queue. Measured after the fix: all 13 lines, 0 console drops.
+- **PB4 boots as NJTRST** (a JTAG pin). Its mode and alternate-function bits have
+  to be cleared, not OR-ed, or thruster 1 never moves.
+- **TIM8 is an advanced timer**: outputs stay disconnected until `BDTR.MOE` is set.
+- **The two PWM timers need different prescalers**: TIM3's clock is 90 MHz,
+  TIM8's is 180 MHz. Both count at 1 MHz (1 µs per count), 20 ms period.
+- All eight compare registers are set to 1500 µs **before** the outputs are
+  enabled, so an ESC never sees a 0 µs pulse.
 
 ---
 
-## 7. Interrupts
+## 3. How the firmware is organised
 
-`configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY = 5`, and with `configPRIO_BITS = 4` that makes `configMAX_SYSCALL_INTERRUPT_PRIORITY = 5 << 4 = 0x50`.
+```
+Core/        tasks, main, FreeRTOS config, interrupt handlers, console, fault latch
+Drivers/     register-level peripheral drivers: uart, i2c, spi, timers, watchdog
+Devices/     one folder per external device: vn200, bno085, bar30, adc_depth, dvl, oled
+Protocol/    Pi packet framing, CRC-16, ring buffer, SD card + log layout
+Middlewares/ FreeRTOS kernel; CEVA's SH-2 library for the BNO085 (unmodified)
+tests/host/  PC unit tests for the parsers and maths
+tools/hil/   laptop-driven bench test (hil_rtos.py) and its last report
+docs/        hardware checklist, list of datasheets used (docs/datasheets)
+```
 
-The rule: **an ISR may call a `...FromISR` API only if its raw IPR byte is numerically ≥ 0x50.** Lower numbers are higher priority and are *not* masked by `BASEPRI = 0x50`, so they could preempt a kernel critical section.
+Data flow, from sensor to thruster:
 
-| IRQ | `NVIC_SetPriority` | Raw IPR | Calls kernel API? | Legal |
-|---|---|---|---|---|
-| TIM7 | 5 | 0x50 | `vTaskNotifyGiveFromISR` | Yes, **at the ceiling** |
-| USART1 | 5 | 0x50 | `xTaskNotifyFromISR` | Yes, at the ceiling |
-| DMA2 Stream2 | 5 | 0x50 | `xTaskNotifyFromISR` | Yes, at the ceiling; equal to USART1 on purpose |
-| USART2 | 6 | 0x60 | none (one volatile store) | Yes |
-| USART3 | 6 | 0x60 | `xTaskNotifyFromISR` | Yes |
-| UART4 | 6 | 0x60 | `xTaskNotifyFromISR` | Yes |
-| TIM2 CC1 (bench build) | 6 | 0x60 | none | Yes |
-| SysTick / PendSV | — | 0xF0 | kernel-owned | Yes |
+```
+VN-200  ─USART3 DMA─┐                             ┌─► comms_task ─USART1 DMA─► Pi
+BNO085  ─I2C1──────►├─ imu_task ───► imuQueue ────┤      (telemetry, sensors, DVL frames)
+                    │                             │
+Bar30   ─I2C1──────►├─ depth_task ─► depthQueue ──┤
+Analog  ─ADC1──────►┘                             ├─► logging_task ─► SD card
+DVL     ─UART4 DMA────── dvl_task ─► dvlQueue ────┘
 
-TIM7, USART1 and DMA2 Stream2 sit *exactly* at the ceiling: legal, with zero margin. Dropping `configLIBRARY_MAX_SYSCALL_INTERRUPT_PRIORITY` to 4 would break all three, and `configASSERT` would catch it.
+Pi ─USART1 DMA─► comms_task ─► commandQueue ─► control_task ─► TIM3/TIM8 ─► 8 ESCs
+                                                    ▲
+                            TIM7 interrupt, 50 Hz ──┘
+```
 
-`SCB->AIRCR` PRIGROUP is set to 3 (4 bits preemption, 0 subpriority) as **init step 2**, before any `NVIC_SetPriority` call.
-
-**Measured latency.** From the TIM7 interrupt to `control_task` running: 6.2–7.2 µs over every run, idle and loaded. The tick itself: worst 0.80 µs from the 20 ms nominal at idle and 1.31–1.87 µs under full UART load across runs, measured ISR entry to ISR entry with the DWT cycle counter.
-
-### USART1 receive: IDLE plus half/full-transfer
-
-The DMA position is `SIZE − NDTR`, which says where the DMA is, not how far it has gone. If exactly 256 bytes arrive between two drains, the position comes back to where it was, and a whole buffer is indistinguishable from no data at all. With the IDLE interrupt as the only drain trigger, that happens whenever a burst is exactly 256 bytes with no gap.
-
-The DMA2 Stream2 half-transfer and transfer-complete interrupts now drain too. They fire 128 bytes apart, so the DMA can never lap between two drains; IDLE still catches the tail of a burst. **Reproduced and fixed on hardware:** a 256-byte burst through the PA9 → PA10 loopback delivered **0 of 256 bytes** with IDLE-only draining, silently, and **256 of 256** with the fix. Over a full run, 118,978 bytes were drained by 929 half/full-transfer events and 1,919 IDLE events.
-
-### No kernel API is reachable from any ISR before the scheduler runs
-
-`NVIC_EnableIRQ` for every interrupt-driven peripheral is called from the *consuming task's* first iteration, never from `main`:
-
-| Peripheral | Enabled by | In |
-|---|---|---|
-| TIM7 | `tim7_init()` | `control_task` |
-| USART1, DMA2 Stream2 | `uart1_irq_enable()` | `comms_task` |
-| USART3 | `uart3_irq_enable()` | `vn200_task` |
-| UART4 | `uart4_irq_enable()` | `dvl_task` |
-
-Between the last `xTaskCreate` and `vTaskStartScheduler()`, `pxCurrentTCB` is populated but **PSP is still zero**: `vPortSVCHandler` sets it, and that runs inside `vPortStartFirstTask`. An ISR reaching `portYIELD_FROM_ISR` in that window pends PendSV, whose context save does `mrs r0, PSP` then `stmdb r0!, {...}`: a write through a null stack pointer.
-
-USART2 is the sole exception, enabled in `main`. Its handler's entire reachable body is one volatile byte store, with no FreeRTOS API and no yield. From `vTaskStartScheduler()` onward the kernel closes the window itself: `portDISABLE_INTERRUPTS()` sets `BASEPRI = 0x50` before `xPortStartScheduler()`, masking every interrupt in this design.
+Sensor fusion happens on the Pi. The pose the PID controls on comes back from
+the Pi in every command packet; the STM32's own sensors are sent up as raw
+readings and are not inputs to its controller.
 
 ---
 
-## 8. Memory
+## 4. Tasks and priorities
 
-### Static
-
-| Build | text | data | bss | Flash (text + data) | RAM (data + bss) |
+| Prio | Task | Wakes on | Rate | Stack | Does |
 |---|---|---|---|---|---|
-| Vehicle (`-DBENCH_HIL=0`) | 34,800 | 116 | 29,620 | 34,916 B (6.7 % of 512 KiB) | 29,736 B (22.7 % of 128 KiB) |
-| Bench (default) | 43,428 | 120 | 30,416 | 43,548 B (8.3 %) | 30,536 B (23.3 %) |
+| 7 | `control_task` | TIM7 interrupt (task notification) | 50 Hz | 1 KB | PID, thrust allocation, PWM, **command timeout**, watchdog refresh |
+| 5 | `comms_task` | USART1 RX, control's tick, TX-done (notification bits) | 50 Hz out | 1 KB | parses commands, sends telemetry / sensors / DVL frames |
+| 4 | `imu_task` | USART3 RX, or a 5 ms timeout to poll the BNO085 | 100 Hz | 1.5 KB | VN-200 + BNO085 → `imuQueue` |
+| 4 | `depth_task` | `vTaskDelayUntil`, 20 ms | ~35 Hz | 1.5 KB | Bar30 + analog sensor → `depthQueue` |
+| 4 | `dvl_task` | UART4 RX | per ping | 1 KB | Wayfinder frames → `dvlQueue` |
+| 3 | `spi_owner_task` | its request queue, or 500 ms timeout | — | 1 KB | the only task that touches SPI2 (SD card, display) |
+| 2 | `logging_task` | `logQueue` | 5 Hz | 1 KB | packs log records into 512-byte SD blocks |
+| 1 | `dummy_task` | `consoleQueue`, or 50 ms timeout | — | 1.5 KB | the only task that prints; heartbeat LED; `s` / `h` reports |
+| 0 | idle | | | | FreeRTOS's own |
 
-`bss` includes `ucHeap` (22,528 B), the OLED framebuffer (1,024 B), the log staging block (512 B), four 256 B UART DMA/ring buffers, and `._user_heap_stack` (1,536 B).
+**Why this order.**
 
-### Heap: a prediction that could have failed
+- **Control is on top** because it is the only thing with a hard deadline that
+  moves hardware. Nothing below it can delay a thruster update.
+- **Comms is next**: commands and telemetry are time-sensitive, but a late
+  telemetry frame is harmless and the failsafe does not depend on comms (§10).
+- **Sensor tasks share priority 4.** Their work is short (parse a few hundred
+  bytes, or wait for a conversion) and they block most of the time. Time
+  slicing is on, so equal-priority tasks take turns; none can hog the CPU.
+- **The SPI owner sits at 3**: above `logging_task` (which feeds it, so logging
+  can't pile up more work mid-transfer) and below every task with a deadline
+  (an SD write can take 250 ms and must be preemptible).
+- **Console at the bottom**: printing is never urgent, and putting the
+  heartbeat LED here means a blinking LED proves the *whole* schedule runs.
 
-**Every allocation happens before `vTaskStartScheduler()`**, and every `xTaskCreate` / `xQueueCreate` return value is checked; failure latches the name and halts before the scheduler starts. No task calls `pvPortMalloc` at runtime. That makes a falsifiable prediction: `xPortGetMinimumEverFreeHeapSize()` must **equal** `xPortGetFreeHeapSize()` for as long as the board runs.
+**One task for two IMUs, one for two depth sensors** (rather than one per chip):
+each pair produces the same kind of reading, and choosing between them is
+simplest where both are visible (§8).
 
-**Measured:** 9,448 B free and 9,448 B minimum-ever, read at boot and again after a full HIL run (failsafe, fault paths, a 60 s soak). Equal. (9,960 B before `dummy_task` grew by 512 B; also equal.)
+Every UART interrupt is enabled **from the task that consumes it**, on its first
+run, not from `main`. An interrupt that tried to wake a task before the
+scheduler started would write through a null stack pointer (PSP is still 0
+until the first task starts).
 
-| | Bytes |
-|---|---|
-| `ucHeap` declared | 22,528 |
-| Lost to 8-byte alignment of `ucHeap` (linked at `0x…BC`) and the `xEnd` marker | 12 |
-| Queues: 7 × (72 B `Queue_t` + storage), each + 8 B `heap_4` header, 8-aligned | 2,920 |
-| Task stacks + TCBs: 7 × (1,032 + 96) + (1,544 + 96) | 9,536 |
-| IDLE stack + TCB | 616 |
-| **Free, predicted from the map** | **9,444** |
-| **Free, measured** | **9,448** (41.9 %), 4 B from the prediction |
+---
 
-### Stacks: predicted vs measured
+## 5. How tasks talk to each other
 
-High-water marks after every error path the bench can reach had run, bench build:
+Two rules decide the shape of every queue:
 
-| Task | Alloc | Static prediction (vehicle) | Measured (bench) | Free |
+- **FIFO when every item matters** (commands, log records, console lines).
+- **A one-slot "mailbox" when only the latest value matters** (sensor readings):
+  the writer uses `xQueueOverwrite`, readers use `xQueuePeek`, so the writer
+  never blocks, readers never wait, and several readers can share one value.
+
+| Queue | From → to | Holds | Kind | When full |
 |---|---|---|---|---|
-| `control_task` | 1024 | 548 | 464 | 560 |
-| `comms_task` | 1024 | 492 | 768 | 256 |
-| `vn200_task` | 1024 | 556 | 664 | 360 |
-| `dvl_task` | 1024 | 668 | 760 | 264 |
-| `bar30_task` | 1024 | 476 | 736 | 288 |
-| `spi_owner_task` | 1024 | 436 | 576 | 448 |
-| `logging_task` | 1024 | 348 | 252 | 772 |
-| `dummy_task` | **1536** | 692 | 928 | 608 |
+| `commandQueue` | comms → control | `CommandPayload` | FIFO, 4 deep | wait 1 ms, then drop and count. Control empties it every tick and uses the newest |
+| `imuQueue` | imu_task → comms, logging | `ImuSample` | mailbox | newest overwrites |
+| `depthQueue` | depth_task → comms, logging | `DepthSample` | mailbox | newest overwrites |
+| `dvlQueue` | dvl_task → comms, logging | `DVLData` | mailbox | newest overwrites |
+| `logQueue` | control → logging | log record or "flush" | FIFO, 8 deep | **never waits**: drop and count |
+| `spiRequestQueue` | logging → SPI owner | a whole 512-byte block | FIFO, 2 deep | wait 500 ms, then drop and count |
+| `consoleQueue` | any task → console | an 80-char line | FIFO, 8 deep | never waits: drop and count |
 
-Two findings. **`dummy_task` was at 928 of its original 1,024 B** (96 B left) once the bench reports ran in it; it was grown to 1,536 B. And **`vn200_task` and `dvl_task` came in about 100 B over their static predictions** even though no bench code runs in them; their only deep path is `console_printf` on the sensor-absent branch. That puts the real newlib-nano `vsnprintf` frame near 220 B, not the ~120 B the analysis estimated and flagged as its weakest number. No stack was ever trimmed on static numbers, which is why none overflowed. `comms_task`, `bar30_task` and `dummy_task` carry bench code (the injector, the MPU-6050 stress test, the reports), so their vehicle-build use is lower than measured here.
+**Nothing on the control path ever blocks.** `control_task` reads
+`commandQueue` with a zero timeout and posts to `logQueue` with a zero timeout.
+An SD card stuck in a 250 ms write can fill the log queue; the cost is lost log
+records (counted), never a missed control tick.
 
-### MSP budget
+**Every place data can be dropped has a counter**, shown by the `h` report.
 
-Tasks run on PSP and handler bodies on MSP. A first exception from thread mode pushes its hardware frame to PSP; **only nested exceptions consume MSP.** Same-priority peers cannot nest, so the chain is at most 3 deep, budgeted at **360 B** of the 1,024 B reserved.
+Other ways tasks synchronise:
 
-**Measured** with a painted MSP under full UART and DMA load: **176–248 B** peak across runs, inside the prediction.
-
----
-
-## 9. Pin map
-
-| Function | Pins | Mode |
+| Mechanism | Used for | Why this one |
 |---|---|---|
-| SWD | PA13 / PA14 | AF0 — untouched |
-| Heartbeat LD2 | PA5 | GPIO out |
-| Debug VCP | PA2 / PA3 | USART2 AF7 |
-| Pi link | PA9 / PA10 | USART1 AF7, DMA2 Stream2 + IDLE |
-| VN-200 | PC10 / PC11 | USART3 AF7, DMA1 Stream1 + IDLE |
-| DVL | PA0 / PA1 | UART4 AF8, DMA1 Stream2 + IDLE |
-| Bar30 (MS5837) | PB8 / PB9 | I²C1 AF4, open-drain, 400 kHz |
-| SPI bus | PB13 / PB14 / PB15 | SPI2 AF5 |
-| SD_CS | PC4 | GPIO out, idle high |
-| OLED_CS | PC5 | GPIO out, idle high |
-| OLED_DC | PC0 | GPIO out |
-| OLED_RES | PC1 | GPIO out |
-| PWM 1–4 | PB4 / PB5 / PB0 / PB1 | TIM3 CH1–4, AF2 |
-| PWM 5–8 | PC6 / PC7 / PC8 / PC9 | TIM8 CH1–4, AF3 |
-| Reserved | PA4 | future ADC depth — left unconfigured |
-| Bench: PWM capture | PA15 | TIM2_CH1 AF1, pull-down (BENCH_HIL build only) |
-
-The Pi connects **GPIO-to-GPIO on USART1**, not over USB, so USART2/VCP stays free for the console.
-
-Three details that are silent failures if missed:
-
-- **PB4 is NJTRST** and boots in an alternate-function state. Its MODER *and* AFR bits are cleared explicitly before TIM3_CH1 is configured — a bare OR leaves thruster 1 dead with nothing in the code looking wrong.
-- **TIM8 is an advanced-control timer**: `BDTR.MOE` must be set or CH1–4 stay electrically disconnected regardless of `CCER`. TIM3 has no equivalent bit.
-- **The two prescalers differ on purpose.** TIM3 is on APB1 (90 MHz timer clock) → `PSC=89`; TIM8 is on APB2 (180 MHz) → `PSC=179`. Both `ARR=19999` for 1 µs resolution and a 20 ms frame. Equal prescalers would run thrusters 5–8 at twice the frame rate.
-
-**Measured:** with channel *k* driven at 1,100 + 100*k* µs and a jumper moved from PA15 (TIM2_CH1 input capture) across the outputs, all eight pins carried exactly their own channel's width and a 20,000 µs period ([sweep](tools/hil/reports/2026-10-05_d53de2b.md), [PC8](tools/hil/reports/2026-10-05_02ee61a_pc8_manual.md)).
-
-All eight CCRs are written to 1500 µs **before** any output stage is enabled, then `EGR.UG` forces the shadow registers — so no ESC ever sees a frame built from the CCR reset value of 0.
+| Task notifications | interrupt → task wake-ups (TIM7, every UART) | lighter and faster than a semaphore; one waiting task per source |
+| Notification **bits** | `comms_task`: RX / telemetry tick / TX done | one task, several events; bits are latched, so two events before it runs are both seen |
+| Mutex | I2C1 (Bar30 in `depth_task`, BNO085 in `imu_task`) | held per transfer; priority inheritance; released during the Bar30's 12 ms conversions |
+| A single owning task | SPI2 (SD card, display) | the bus needs a different clock speed per device; one owner sets it every time, so no caller can forget |
+| Critical section | `control_loop_snapshot()` | copies pose, PID output and PWM together, so a telemetry frame never mixes two control ticks |
 
 ---
 
-## 10. Clock
+## 6. Interrupts and receiving with DMA
 
-180 MHz needs the over-drive sequence, in this order, and it is not optional:
+FreeRTOS's rule: an interrupt may call a `...FromISR` function only if its
+priority number is **5 or higher** (`configMAX_SYSCALL_INTERRUPT_PRIORITY`).
+Lower numbers are more urgent and are not masked by the kernel's critical
+sections, so they could interrupt the kernel mid-update.
 
-```
-1. RCC->APB1ENR |= PWREN
-2. PWR->CR VOS = Scale 1
-3. HSE bypass (no crystal fitted) → PLL M=8 N=360 P=2 Q=7 → wait PLLRDY
-4. PWR->CR |= ODEN    → wait PWR->CSR ODRDY
-5. PWR->CR |= ODSWEN  → wait PWR->CSR ODSWRDY
-6. FLASH->ACR = 5 wait states + prefetch + I-cache + D-cache
-7. AHB ÷1, APB1 ÷4 (45 MHz), APB2 ÷2 (90 MHz)
-8. RCC->CFGR SW = PLL → wait SWS
-```
-
-`PLLCFGR` and `CFGR` are each written **once, fully composed** (`0x27405A08` and `0x9402`), never OR-ed onto their reset values — `PLLCFGR` resets to `0x24003010` with PLLM=16 and PLLN=192, so `|=` produces a silently wrong clock rather than a compile error.
-
-Every hardware wait is bounded. Three outcomes:
-
-| Outcome | Behaviour | Indication |
+| Interrupt | Priority | Calls |
 |---|---|---|
-| HSE locks | 180 MHz, crystal-grade | steady 1 Hz LD2, `CLK: OK` |
-| HSE dead | PLL retuned to **M=16 off the HSI — still 180 MHz** | double-pulse LD2, `CLK: DEGRADED` |
-| PLL / over-drive / switch fails | raw HSI 16 MHz, **scheduler never starts** | LD2 blinks the status code (2/3/4) |
+| TIM7 (control tick) | 5 | `vTaskNotifyGiveFromISR` |
+| USART1 + DMA2 S2 (Pi RX) | 5 | `xTaskNotifyFromISR` |
+| DMA2 S7 (Pi TX done) | 6 | `xTaskNotifyFromISR` |
+| USART3 + DMA1 S1 (VN-200) | 6 | `xTaskNotifyFromISR` |
+| UART4 + DMA1 S2 (DVL) | 6 | `xTaskNotifyFromISR` |
+| USART2 (console RX) | 6 | nothing (stores one byte) |
 
-The HSI fallback holding 180 MHz is what keeps every BRR/CCR/PSC valid — only accuracy degrades, and HSI's ±1 % can corrupt 115200 framing, which is why the blink pattern exists at all. The fatal path halts *before* `vTaskStartScheduler()`, and **that is the invariant that lets `configCPU_CLOCK_HZ` be a literal `180000000UL`** instead of the `SystemCoreClock` variable.
+A UART and its RX DMA stream always have the **same** priority: both update the
+same "last position" variable, and equal priorities can't interrupt each other,
+so no lock is needed.
 
-**Measured.** Over 10.14 s the DWT cycle counter (HCLK), TIM2 (APB1 timer clock / 90) and SysTick (HCLK / 180,000) agreed exactly: 10,140,000 µs of TIM2 over 10,140 ticks, and 180.0000 DWT cycles per TIM2 microsecond. Against the laptop's clock the board was within 0.16 %, the limit of USB timestamp jitter. Every boot reported `CLK: OK (HSE bypass, 180 MHz)`.
+**How every UART receives.** The DMA copies bytes into a 256-byte circular
+buffer with no CPU involvement. Three interrupts move new bytes into a software
+ring and wake the task:
+
+- **IDLE line** — the sender paused, so a packet has probably finished;
+- **half transfer** and **transfer complete** — the DMA reached the middle or
+  the end of the buffer.
+
+IDLE alone is not enough, and the bench proved it: the code works out "new
+bytes" from the DMA's position, and if exactly 256 bytes arrive between two
+IDLE events the position comes back to where it was and the whole burst looks
+like nothing arrived. A sensor that streams with no gaps never raises IDLE at
+all. The half/complete interrupts fire every 128 bytes, so the DMA can never go
+a full lap unseen. The `w` / `v` bench test sends exactly 256 bytes with and
+without the fix and shows the difference.
+
+**Sending to the Pi** uses DMA too. `comms_task` builds whole frames in a
+4-slot ring; the DMA sends one, its transfer-complete interrupt notifies the
+task, and the task starts the next. Before this, the task wrote each byte
+itself and waited on the UART in between: 5.4 ms per frame, measured at **27%
+of the CPU** at 50 Hz (54% with two frames per tick).
 
 ---
 
-## 11. Two decisions worth the words
+## 7. Sensors
 
-### Bounded vs unbounded polling — the distinction is who controls completion
+### VN-200 (USART3)
 
-`i2c.c`'s waits are bounded and yielding. `spi.c`'s and the UART TX paths' are not, and that is deliberate rather than an oversight.
+Set up once from a PC (VectorNav Control Center or a terminal) and saved to the
+sensor, so the firmware only listens. From the user manual (UM004):
 
-**I²C completion is controlled by an external agent.** A slave can stretch SCL indefinitely, or simply never ACK. `while (!(SR1 & flag));` therefore has no bound in the physical sense, not merely in the code. With no Bar30 attached, `bar30_task` spun forever at priority 4 — control and comms kept running so the board *looked* alive, while logging, the SPI owner and the console were starved permanently.
+```
+$VNWRG,06,0*XX                 turn off ASCII output
+$VNWRG,75,1,8,01,0128*XX       binary output 1: serial port 1, 800/8 = 100 Hz,
+                               group 1 (Common), fields 0x0128 =
+                               YawPitchRoll (bit 3) + AngularRate (bit 5) + Accel (bit 8)
+$VNWNV*57                      save to flash
+```
 
-**SPI and UART TX completion is master-generated.** The STM32 produces SCK; the UART shifts at its configured baud regardless of any receiver. `TXE`, `RXNE` and `BSY` transitions depend only on internal clocking, so those loops are bounded by hardware even though they are not bounded by code. Adding timeouts there would be ceremony.
+That gives a 42-byte packet: `0xFA`, group byte, 2-byte field mask, 36 bytes of
+floats (yaw/pitch/roll in degrees, angular rate in rad/s, acceleration in m/s²
+including gravity), CRC-16. The CRC is checked the way the manual suggests: run
+it over everything after the sync byte **including** the CRC, and a good packet
+gives 0. On a bad packet the parser slides forward to the next `0xFA` rather
+than throwing away 42 bytes, so a real packet starting inside a bad one is not
+lost.
 
-The I²C wait is **spin-then-yield**: 250 µs of spinning covers a healthy 90 µs phase with margin so a working bus never pays a context switch, then 1 ms yields up to a 2.5 ms budget, with backoff on consecutive failures.
+### BNO085 (I2C1, no INT/RST pins)
 
-**The hardware run found the flaw in it.** `bar30_task` (priority 4) is preempted for 5.4 ms at a time by `comms_task`'s blocking telemetry send, longer than the whole 2.5 ms budget. It woke past the deadline, left the loop without polling, and reported a timeout on a phase the peripheral had finished long before; the abort then sent STOP mid-transfer and latched the I²C peripheral's BUSY flag with both lines idle high. Result: 99 % of MPU-6050 transfers failed, with **0 wrong values** among those that completed. The wait now polls once more before giving up (clock stretching holds the bus while the task is away, so a late poll is always safe), and every error path resets the peripheral if BUSY is still latched. **Measured after the fix:** 4,000 reads with the RM0390 receive sequence, 0 errors, while preempted mid-transfer; individual 14-byte reads stretched to 12.6 ms and still returned correct data.
+CEVA's SH-2 library does the protocol (it's the code inside the Adafruit
+library the Pico used). The firmware provides the four functions it needs:
+open (soft reset, which also finds the address), read, write, and a
+microsecond clock. Without the INT pin, the sensor is polled every 5 ms: read
+the 4-byte header, and the whole packet only if the header says one is waiting.
 
-### No floating-point conversions in the console
+Reports, at 50 Hz: **game rotation vector** (accel + gyro fusion, no
+magnetometer, which is unreliable next to thruster motors), calibrated gyro, and
+accelerometer. One SHTP packet can carry several reports, so each report type
+is cached separately.
 
-`--specs=nano.specs` without `-u _printf_float` means `%f` **prints nothing and takes the rest of the line with it** — no error, no warning, no wrong number. Confirmed absent from the ELF. The decision is fixed-point milli-units via `console_fmt_milli()`, not the ~6 KB of `_printf_float`, and the reason beyond the flash is this:
+Opening the sensor blocks `imu_task` for up to ~0.5 s (300 ms for the sensor to
+reboot, up to 200 ms waiting for its start-up messages). The VN-200's receive
+ring is 4 KB so that a second of VN-200 data waits safely during that time.
 
-> **Varargs promote `float` to `double` unconditionally — that promotion is mandated by the language, so `-Wdouble-promotion` cannot flag it.** Every `%f` call site would quietly reintroduce soft-float double conversion into a codebase that is otherwise strictly single-precision on a single-precision FPU.
+### Bar30 (MS5837-30BA, I2C1)
 
-Float formatting also costs ~100 B of stack per call, on the *caller's* stack, which is the least-characterised part of the budget. `console_fmt_milli` takes a caller-supplied buffer on purpose: a shared one would make `console_printf("d=%s u=%s", fmt(a), fmt(b))` print one value twice, since argument evaluation order is unspecified — and that failure reads as a sensor fault, not a formatting fault.
+Reset, read the 7 calibration words, **check their CRC-4**, then for each
+reading: start a pressure conversion, wait, read 24 bits; same for
+temperature; apply the datasheet's first- and second-order compensation.
+
+- The wait is **12 ms**. A conversion at OSR 4096 takes up to 9.04 ms, and
+  `vTaskDelay(10)` can return after only 9 ms (the first tick may be almost
+  over). An ADC read during a conversion returns 0, which shows up as a
+  negative depth spike.
+- The I2C mutex is released during each wait, so the BNO085 can use the bus.
+- Depth = (pressure − surface pressure) / (997 kg/m³ × g). Surface pressure is
+  measured at start-up only if it looks like air pressure (950–1050 hPa);
+  otherwise 1013.25 hPa is used, so a reboot underwater doesn't read 0 m.
+- If the sensor stops answering, it is re-initialised when it comes back, so it
+  can be plugged in after boot.
+
+### Analog pressure sensor (DFRobot SEN0257, PA4)
+
+0–1 MPa → 0.5–4.5 V, so **250 kPa per volt** (the Pico test sketch used 400,
+which reads 1.6× too high). A 2:1 divider keeps the pin at or below 2.25 V.
+
+- 16 ADC samples are averaged per reading. The chip's internal reference is
+  measured too, which gives the true supply voltage, so the reading doesn't
+  scale with supply error.
+- The zero (0.5 V nominal) is measured at start-up and only accepted between
+  0.45 and 0.55 V, for the same underwater-reboot reason as the Bar30.
+- Accuracy is 0.5–1% of full scale, about **±0.5–1 m**. It's a backup.
+
+### Wayfinder DVL (UART4)
+
+116-byte frames, layout from Teledyne's "Wayfinder Binary Interface Packet
+Protocol" page: header, timestamp, velocity x/y/z/error, four beam ranges,
+status, voltages, two checksums. When there is no bottom lock the velocities
+are **NaN**; those frames are still sent to the Pi, marked
+`velocity_valid = 0`, so the Pi can tell "DVL alive, no bottom" from "no DVL".
+
+Teledyne's page doesn't say exactly which bytes the final checksum covers, so
+the parser accepts both readings and counts which one matched (`h` report).
+The first run with the real DVL settles it.
+
+### Sensor health
+
+Each sensor is `ok`, `ABSENT` (never answered since boot: check the wiring) or
+`FAULTED` (answered, then stopped: check the sensor). Health is judged on
+**good packets**, not on bytes arriving; a misconfigured VN-200 sends plenty of
+bytes and never a valid packet. Every change is printed once on the console.
 
 ---
 
-## 12. Defects found
+## 8. Choosing between two sensors
 
-### Found on hardware
+`source_select.c`, used for the IMU (VN-200 preferred, BNO085 backup) and depth
+(Bar30 preferred, analog backup):
 
-Found by the HIL runs on 2026-10-05, each in code that compiled cleanly and had passed static review.
+- A sensor is **fresh** if its last reading is ≤ 200 ms old.
+- Use the preferred sensor whenever it's fresh.
+- If it goes stale, switch to the backup.
+- Switch back only after the preferred one has been fresh for **1 s without a
+  break**, so a loose connector doesn't make the output flip back and forth.
+- Neither fresh: source "none".
 
-| Defect | How it presented | Fix |
+The active source travels with every reading (`ImuSample.source`,
+`DepthSample.source`) into the Pi packets and the log, and every switch is
+printed on the console. It's pure logic with no RTOS calls, so it's tested on
+the PC, including the 32-bit tick wrapping through zero.
+
+**Caveat for the Pi:** the VN-200 gives true heading; the BNO085's game rotation
+vector starts at an arbitrary yaw. A switch between them is a jump in yaw, and
+the two sensors' axis conventions still need checking against each other on
+the bench.
+
+---
+
+## 9. The Pi link protocol
+
+Same frame as the team's Pico firmware, so the existing Pi code keeps working:
+
+```
+[0xAA][0x55][LEN=56][TYPE][56-byte payload][CRC-16 hi][CRC-16 lo]   62 bytes
+```
+
+CRC-16-CCITT (poly 0x1021, init 0xFFFF) over LEN, TYPE and the payload. All
+fields little-endian. The receiver resyncs by sliding one byte at a time until
+the header, length and CRC all check out.
+
+| Type | Direction | Rate | Contents | Python `struct` |
+|---|---|---|---|---|
+| `0x01` TELEMETRY | STM32 → Pi | 50 Hz | Pi's depth echoed, onboard depth, PID output ×6, PWM ×8, armed, saturation flags, link ok | see `Protocol/struct.h` |
+| `0x02` CMD | Pi → STM32 | Pi's rate | current pose ×6, target pose ×6, armed, sequence | `'<12f3B5s'` |
+| `0x03` SENSORS | STM32 → Pi | 50 Hz | IMU source, accuracy, yaw/pitch/roll, gyro, accel, depth source, depth, water temp, ages | `'<IHHBBBB3f3f3fff'` |
+| `0x04` DVL | STM32 → Pi | each new DVL frame | velocity valid, velocities, 4 ranges, mean range, status, voltages, age | `'<IHBB4f4ffHHff'` |
+
+Every outgoing payload is zeroed before it's filled, so stale stack bytes
+never end up in the CRC. Ages (`*_age_ms`) say how old a reading was when the
+frame was built; the Pi should ignore anything older than ~200 ms.
+
+**Link budget at 115200 baud:** a frame is 5.4 ms on the wire. Telemetry +
+sensors every 20 ms plus DVL frames is about 60% of the link. Fine for now; the
+baud rate should go up when the Pi side is updated.
+
+---
+
+## 10. Control loop and failsafes
+
+Every 20 ms TIM7 wakes `control_task`, which:
+
+1. empties `commandQueue` and takes the newest setpoint and pose;
+2. checks the command timeout;
+3. if armed: PID per axis (surge, sway, heave, roll, pitch, yaw), clamped, then
+   thrust allocation through a precomputed 8×6 pseudo-inverse, with the
+   vertical, horizontal and yaw groups scaled separately when they saturate;
+4. writes the 8 PWM outputs;
+5. refreshes the watchdog;
+6. tells `comms_task` to send telemetry, and every 10th tick posts a log record.
+
+Measured on the bench: the TIM7 period is 20 000.00 µs with at most 1.3 µs of
+jitter; the task starts 6–7 µs after the interrupt; the loop body takes 17 µs
+on average and 109 µs at worst.
+
+### The failsafes, from most to least likely
+
+| Failure | What happens | Where |
 |---|---|---|
-| I²C wait gave up without a final poll after being preempted past its deadline | 99 % of MPU-6050 transfers failed under load, 0 wrong values among the rest | Poll once more before a timeout. `02ee61a` |
-| An aborted I²C transfer could latch BUSY with SCL = SDA = 1 | Every later START timed out until reset (`SR2 = 0x0002`) | `i2c_fail()`: STOP, wait, reset the peripheral if BUSY persists. `02ee61a` |
-| `dummy_task` stack at 928 of 1,024 B | Stack test failed: 96 B free after the error paths ran | Grown to 1,536 B. `b429abe` |
-| `i2c_write()` set STOP before BTF, dropping the last byte of multi-byte writes | Found on the bare-metal tree's hardware run (MPU-6050 never woke); fixed here before it could bite | Wait for BTF. `21c8ad9` |
+| Pi stops sending (or sends garbage) | after **500 ms** without a CRC-valid command: disarm, thrusters to 1500 µs, setpoint and PID state cleared | `checkCommandTimeout()` in **`control_task`** |
+| `comms_task` hangs | same as above: the timeout only reads a timestamp, it doesn't depend on comms | |
+| `control_task` hangs | the watchdog (~1 s) resets the board; the ESCs lose their signal and stop | only `control_task` refreshes the IWDG |
+| CPU fault (HardFault etc.) or failed `configASSERT` | thrusters set to 1500 µs first, then the fault and its address are saved in RAM that survives reset, then halt (and the watchdog resets) | `stm32f4xx_it.c`, `fault_latch.c` |
 
-### Found while designing the bench test, then confirmed on hardware
+Putting the timeout in the control task rather than in comms is the key
+decision: the things that kill the link and the things that hang the comms task
+overlap a lot, so the check must not live in either. The bench test suspends
+`comms_task` entirely and checks the vehicle still disarms.
 
-| Defect | Effect | Confirmed on hardware | Fix |
-|---|---|---|---|
-| Failsafe recovery counted 3 valid packets at any spacing | 2 packets, a long silence, 1 more re-armed the vehicle | Gap test: streak resets after 1.2 s | `7f7b9e9` |
-| IDLE-only DMA draining | An exactly 256-byte burst vanished silently | 0 / 256 before, 256 / 256 after | `7f7b9e9` |
-| `consoleQueue` depth 8, posted to by its only reader | 13-line reports printed 8 lines | 13 lines, 0 drops | `7f7b9e9` |
-| One frame parsed per RX notification | A second frame in a burst waited a tick or more | 506 / 506 commands applied within one tick | `7f7b9e9` |
-| UART ring-buffer overflow not counted | Data loss looked like CRC noise | 0 drops counted over 118,978 bytes | `7f7b9e9` |
+**Recovery is deliberately harder than failure.** Going into failsafe takes one
+missed deadline. Coming out takes **3 consecutive valid packets**, none more
+than 500 ms apart: one packet after a dropout proves nothing. The setpoint was
+zeroed on entry, so a stale packet can't bring back the throttle the vehicle
+had when the link died.
 
-### Found by static analysis
+**Ramp-up.** After any disarm (failsafe or the Pi's own `armed = 0`), the PID's
+integral, last error and output are cleared and the slew limiter is switched
+back on: outputs walk up from 1500 µs at 50 µs per tick (2500 µs/s) until they
+catch up with the command. Then the limiter turns off and the PID has full
+authority. Before this was fixed, only the failsafe reset that state; a normal
+disarm and re-arm stepped straight to the commanded thrust, with a stale
+integral and a one-tick derivative spike.
 
+**Build configurations.** *Release* is the vehicle build: watchdog always on,
+bench test hooks never compiled in. *Debug* has the bench hooks and no
+watchdog, so a breakpoint doesn't reset the board. A build without the watchdog
+says so on boot and blinks the LED in a different pattern.
 
-Found by reading the map file, the `-fstack-usage` output, or the
-disassembly, before the board was available. Several were later confirmed
-by the hardware run (the clock, the fault latch, the pre-scheduler ISR
-window); none of the fixes needed revisiting.
+---
 
-| Defect | How it presented | How it was found |
+## 11. SPI bus, SD logging and display
+
+SPI2 carries the SD card and the display. One task owns it
+(`spi_owner_task`); other tasks send it requests. The bus needs a different
+clock speed per device (352 kHz for SD start-up, 5.6 MHz for SD data and the
+display), and with one owner the speed is set in one place before every
+transfer. A mutex would make every user responsible for setting it, and
+forgetting fails only sometimes.
+
+A mutex would be the better choice if a high-priority task ever needed the bus
+directly: then a priority-3 owner serving it through a queue is priority
+inversion with no inheritance. Nothing at priority ≥ 4 touches SPI.
+
+**Logging.** Every 10th control tick (5 Hz) a 40-byte record (time, pose, PWM,
+armed, link, CRC) goes to `logging_task`, which packs 12 of them into one
+512-byte SD block with a small header. Writing each record as its own block
+would program 12.8× more flash and hit the card's 250 ms worst-case busy time 5
+times a second. The cost: up to 2.4 s of records are lost on a sudden power cut
+(a disarm or failsafe flushes the block early).
+
+---
+
+## 12. Memory, stacks and timing
+
+Release build (`-Os`): **41 KB flash** of 512 KB, **36.5 KB RAM** of 128 KB
+(of which the FreeRTOS heap is 22 KB, the VN-200 ring 4 KB).
+
+**All allocation happens before the scheduler starts**: tasks and queues are
+created in `main`, every result is checked, and a failure stops the boot with
+its name saved in the fault latch. The bench confirmed it: heap free equals the
+minimum-ever free (9448 B) after every test, so nothing allocates at run time.
+
+**Stacks** were sized from the measured high-water marks (`s` on the console)
+after the error paths had run (failsafe, junk frames, bad CRC, missing I2C
+device, console reports), with headroom on top. That run caught `dummy_task`
+using 928 of its 1024 bytes, more than static analysis predicted (the
+formatted-print code is bigger than estimated); it now has 1.5 KB. `imu_task`
+and `depth_task` get 1.5 KB because they print and call into bigger drivers;
+their marks still need measuring.
+
+**printf without floats.** `--specs=nano.specs` has no `%f`, and `%f` in a
+varargs call would promote floats to double anyway. Numbers are printed as
+fixed-point with `console_fmt_milli()`.
+
+---
+
+## 13. Bugs found and fixed
+
+The interesting ones, and how each was found.
+
+**Found on the bench:**
+
+| Bug | Symptom | Fix |
 |---|---|---|
-| `PLLCFGR` written with `\|=` onto its reset values (PLLM=16, PLLN=192) | PLL configured out of spec — VCO input 0.33 MHz against a 0.95 MHz floor, so the output is undefined and lands near half the intended clock | Reading the reference manual's reset values against the code |
-| `RCC->CFGR` assigned twice; the second wiped `PPRE1` | APB1 left at HCLK, 36 MHz over its 45 MHz maximum | Same |
-| `HSE_VALUE` never defined anywhere | Fell through to ST's 25 MHz default; `SystemCoreClockUpdate()` would report 562.5 MHz, and FreeRTOS programs SysTick from it | Grep for the symbol after fixing the PLL |
-| Six pins claimed twice, later `_init()` silently winning | `printf` died the moment `oled_init()` ran; SPI1_MISO and TIM3_CH1 both broken by an `\|=` producing a nonexistent AF7 on PA6 | Cross-referencing every driver's pin config against the AF table |
-| `pwm_set_us()` ignored its `channel` argument | All 8 thrusters collapsed onto CCR1, last write winning | Reading the function |
-| `dummy_task` stack 180 B short | Would have overflowed on its first stack-audit print | `-fstack-usage` + call-chain summation |
-| Null-PSP window before `vTaskStartScheduler()` | An early UART byte pends PendSV, whose context save writes through PSP = 0 | Disassembling `PendSV_Handler` and `vPortStartFirstTask` |
-| Unbounded I²C polls | With no sensor attached, `bar30_task` spins forever at priority 4, starving priorities 1–3 while the board looks alive | Enumerating every `while (!(REG & flag))` and asking who controls completion |
-| `ring_buffer.c`: `rx_head` / `rx_tail` / `rx_count` **not** `volatile` | `rx_write()` runs in `USART1_IRQHandler` while `rx_avail()` / `rx_peek()` / `rx_eat()` run in `comms_task`. `rx_count` is read in the packet framing loop — exactly the shape a compiler is entitled to hoist. `uart3.c` and `uart4.c` had qualified their equivalents; this file had not | Systematic `volatile` audit of every cross-context variable |
-| `ring_buffer.c`: `rx_write()` called `__enable_irq()` unconditionally **from ISR context** | Re-enables interrupts regardless of the caller's state, breaking any critical section in effect further up the stack | Same audit — reading who calls the function, not just what it does |
-| SD busy timeout expressed as a loop count | ~110 ms against a 250 ms spec allowance, so a merely-slow card was reported as failed | Converting the loop count to time |
-| Slew limiter active on every armed tick | Capped control authority at 6.25 % of range per tick, invisible from outside and indistinguishable from mis-tuned gains | Reading `applyPWM` while checking a different claim |
+| UART receive used only the IDLE interrupt | a 256-byte burst with no gap vanished | half/full-transfer interrupts too (§6) |
+| I2C write set STOP right after loading the last byte | the last byte was never sent (MPU-6050 stayed asleep) | wait for BTF (byte transfer finished) before STOP |
+| I2C read cleared ACK in software in time "usually" | under preemption one byte too many was ACKed, corrupting the next read | the reference manual's sequences, which stretch the clock while deciding |
+| I2C timeout checked without one last poll | a task woken late reported a timeout on a finished transfer, then sent STOP mid-transfer and wedged the bus | poll once more after the deadline; recover a stuck BUSY flag |
+| Console report longer than the queue | the 13-line health report printed 8 lines | the printing task writes its own lines directly |
+| Recovery counted "3 packets since the dropout", any spacing | two packets, ten seconds of silence, one more: re-armed | a gap over 500 ms restarts the count |
+| `dummy_task` stack | 928 / 1024 bytes used | 1.5 KB |
 
-The last two `ring_buffer.c` entries are worth singling out: they were the
-only defects that a purely structural review would have missed. Finding
-them needed the question *"who executes this function, and who else
-touches what it touches"* rather than *"is this function correct"*.
+**Found by checking against datasheets and manuals:**
 
----
-
-## 13. Bare-metal → RTOS: what changed
-
-| | Bare-metal | FreeRTOS |
-|---|---|---|
-| Scheduling | Single superloop | 8 priority-preemptive tasks |
-| Control timing | Best-effort loop iteration | TIM7 → 50 Hz notify, jitter bounded by priority |
-| Concurrency safety | Implicit — one thing ran at a time | Explicit: bus owner, queues, `volatile` audit |
-| SPI | No hazard — nothing could preempt a transfer | Structural exclusion via a single owning task |
-| Timing source | `g_tick` from SysTick | `xTaskGetTickCount()`; SysTick is kernel-owned |
-| Sensor absence | Blocking poll, board hangs | `SENSOR_ABSENT` / `SENSOR_FAULTED`, task keeps running |
-| Failure reporting | LED blink | `.noinit` fault latch surviving warm reset, + console |
-| Diagnostics | None | On-demand stack/health over VCP, drop counters everywhere |
-
-`SysTick`, `SVC` and `PendSV` are owned by the FreeRTOS port — the old bare-metal handler bodies were deleted on remap to avoid duplicate-symbol link errors. `g_tick` and `delay_ms()` are gone: FreeRTOS owns SysTick, so `g_tick` was never incremented and `delay_ms()` would have hung forever if called.
-
-Packets and log records both use CRC-16/IBM-3740, computed in software. The STM32's hardware CRC unit is CRC-32 only, and a pure function removes the shared-peripheral race the hardware unit had between `comms_task` and `control_task`.
-
----
-
-## 14. Hardware-in-the-loop verification
-
-### The rig
-
-```
-  Laptop                                     NUCLEO-F446RE
-  ┌──────────────────┐   ST-LINK USB       ┌──────────────────────────────────────────┐
-  │ hil_rtos.py      │◄───────────────────►│ USART2 console: single-key bench commands│
-  │  presses keys    │   (flash, power,    │                                          │
-  │  parses reports  │    console)         │ USART1 TX PA9 ──┐  loopback jumper       │
-  │  writes a report │                     │ USART1 RX PA10 ◄┘  the real Pi-link path │
-  └──────────────────┘                     │ TIM2_CH1 PA15 ◄── jumper ── any ESC pin  │
-                                           │ I2C1 PB8/PB9 ◄──────────────► MPU-6050   │
-                                           │ DWT cycle counter, run-time stats        │
-                                           └──────────────────────────────────────────┘
-```
-
-No Raspberry Pi, scope or USB-serial adapter. With PA9 jumpered to PA10, the
-board plays the Pi itself: the bench layer injects command frames on USART1
-TX, and they come back through the vehicle's real receive path (DMA, IDLE and
-half/full-transfer interrupts, ring buffer, parser, queue, control task),
-while the board's own telemetry loops back alongside them. The board measures
-itself with the DWT cycle counter, FreeRTOS run-time stats, a painted MSP,
-and TIM2 input capture. The laptop presses console keys and keeps score. The
-`BENCH_HIL` build flag carries all of it (`Core/Src/bench.c`);
-`-DBENCH_HIL=0` removes it for the vehicle.
-
-### Results
-
-Firmware `02ee61a`, 2026-10-05, ENABLE_IWDG defined for the run. Verbatim
-transcripts: [`02ee61a`](tools/hil/reports/2026-10-05_02ee61a.md) (final),
-[`b429abe`](tools/hil/reports/2026-10-05_b429abe.md),
-[`d53de2b`](tools/hil/reports/2026-10-05_d53de2b.md) (first run, PWM pin sweep),
-[PC8 manual check](tools/hil/reports/2026-10-05_02ee61a_pc8_manual.md).
-
-| Test | Result | Measured |
-|---|---|---|
-| Boot and console | PASS | `CLK: OK (HSE bypass, 180 MHz)`; reset cause `PIN`; sensors absent handled; 13-line health report, 0 drops |
-| Clock tree | PASS | DWT / TIM2 = 180.0000 cycles per µs; TIM2 vs SysTick exact over 10.14 s; laptop within 0.16 % |
-| Scheduling, idle | PASS | tick 19,999.20–20,000.80 µs; TIM7 → task 6.31–6.88 µs; control body 17.0 µs avg; MSP 176 B |
-| Heap prediction | PASS | free 9,448 B == minimum-ever 9,448 B |
-| USART1 loopback | PASS | 104 frames back in 2 s |
-| Telemetry over USART1 | PASS | 506 frames in 10 s, 0 CRC failures, 0 ring drops |
-| Commands in, round trip out | PASS | armed after 3 packets; 506 / 506 values exact; parse → applied 8.8 ms (≤ one tick); tick jitter 1.31 µs loaded |
-| Junk and split frames | PASS | 257 round trips, 0 corrupted values used, 0 failsafe trips |
-| Corrupted frames | PASS | poisoned value never reached control; failsafe at 520 ms |
-| Command-timeout failsafe | PASS | 3 / 3 at 520 ms |
-| Failsafe, `comms_task` suspended | PASS | 520 ms |
-| Recovery streak | PASS | 3 consecutive packets re-arm; a 1.2 s gap resets the streak |
-| DMA exact-wrap | PASS | IDLE-only: 0 / 256 bytes (defect reproduced); with HT/TC: 256 / 256 |
-| I²C under preemption (MPU-6050) | PASS | RM0390 sequence: 4,000 reads, 0 errors; existing `i2c_read()`: 8 bus errors in 4,000; 0 wrong values either way |
-| Soak, 60 s | PASS | 3,013 frames, 0 CRC failures, 3,013 / 3,013 exact, 0 link drops, 0 resets; CPU idle 44.6 % |
-| Eight PWM outputs | PASS, 8 / 8 | PB4, PB5, PB0, PB1, PC6, PC7, PC9 exact at their channel widths in the sweep (`d53de2b`); PC8 exact in a manual check (`02ee61a`); period 20,000 µs on all 8 |
-| Stacks after error paths | PASS | all 8 tasks ≥ 256 B free; MSP 208 B |
-| Fault latch | PASS | `configASSERT` latched in `.noinit`, reported after the watchdog reset with file and line |
-| Watchdog, hung `control_task` | PASS | 3 / 3 resets in 1,055–1,121 ms, cause `IWDG`; LSI ≈ 29 kHz |
-
-**PC8 (thruster 7).** In the scripted sweep the jumper landed on the
-neighbouring pin and read thruster 5's 1,500 µs signature, which the test
-correctly rejected. A manual check on the final firmware, with the same
-capture and the same bench keys, then read PC8 at exactly 1,700 µs over 52
-pulses and back at 1,500 µs with the signature off
-([transcript](tools/hil/reports/2026-10-05_02ee61a_pc8_manual.md)).
-
-### Running it
-
-```
-pip install pyserial
-python tools/hil/hil_rtos.py          # press RESET when prompted; move the PA15 jumper 8 times
-python tools/hil/hil_rtos.py --selftest   # the script against a built-in fake board
-```
-
-Wiring: PA9 (D8) → PA10 (D2); MPU-6050 VCC → 3V3, GND, SCL → PB8 (D15), SDA → PB9 (D14);
-one jumper from PA15 (CN7 pin 17), moved when prompted. Each block of tests
-SKIPs without its wiring. For the fault and watchdog tests to reset the board
-by themselves, build with `ENABLE_IWDG` defined, and power-cycle the board
-after flashing so the debug unit is off.
-
----
-
-## 15. Key figures
-
-Every number is measured on a NUCLEO-F446RE ([§14](#14-hardware-in-the-loop-verification), transcripts in
-[`tools/hil/reports/`](tools/hil/reports/)) or read from a build output.
-
-| | Figure | Source |
-|---|---|---|
-| **Scope** | | |
-| Code | 5,278 lines of C (cloc), 2,943 lines of comments; FreeRTOS kernel and CMSIS excluded | cloc |
-| Tasks | 8 application tasks, 6 priority levels; 7 queues; 0 runtime allocations | source, heap test |
-| Peripherals at register level | RCC, PWR, FLASH, GPIO, USART1/2/3, UART4, DMA1, DMA2, SPI2, I2C1, TIM2/3/7/8, IWDG | source |
-| HIL tests | 19 automated tests, ~8 min per run; built-in fake board for development | `tools/hil/` |
-| Defects found and fixed | 4 on hardware (1 of them on the bare-metal board), 5 more confirmed on hardware, 12 by static analysis | §12 |
-| **Real-time behaviour, measured** | | |
-| Control-tick jitter (TIM7, 50 Hz) | 0.25–0.80 µs idle, ≤ 1.87 µs under full UART load (worst across all runs) | DWT |
-| Interrupt → control task running | 6.2–7.2 µs | DWT |
-| Control task body (PID + 6×8 allocation + PWM + log post) | 17 µs avg idle; 57 µs avg, 109 µs worst under load (0.55 % of the tick) | DWT |
-| Command latency, parse → applied | 8.8 ms average, 8.9 ms worst; bounded by one 20 ms tick | DWT |
-| CPU load under 50 Hz traffic both ways | idle 44.6 %; `comms_task` 54.4 % (blocking TX), control 0.3 % | run-time stats |
-| **Safety behaviour, measured** | | |
-| Command-timeout failsafe | 520 ms in 5 / 5 trips, including with `comms_task` suspended | HIL |
-| Failsafe recovery | 3 consecutive packets; a 1.2 s gap restarts the count | HIL |
-| Watchdog on a hung control task | 3 / 3 resets, 1,055–1,126 ms across runs; cause read back from `RCC_CSR` | HIL |
-| Fault latch | survives a warm reset; reports kind, file and line | HIL |
-| **Link integrity, measured on the vehicle UART path (USART1 + DMA)** | | |
-| Soak, 60 s | 3,013 frames, 0 CRC failures, 3,013 / 3,013 values exact, 0 drops | HIL |
-| DMA exact-wrap defect | 0 / 256 bytes before the fix, 256 / 256 after | HIL |
-| Parser robustness | 257 frames recovered through junk, decoys and split IDLE events | HIL |
-| **Peripherals, measured** | | |
-| PWM outputs | 8 / 8 pins exact at their channel width at 1 µs resolution, 20,000 µs period | TIM2 capture |
-| I²C under preemption | 4,000 MPU-6050 reads, 0 errors (RM0390 sequence); 14-byte burst 1,570 µs at 100 kHz | HIL |
-| **Memory** | | |
-| Flash, vehicle build | 34,916 B, 6.7 % of 512 KiB | `arm-none-eabi-size` |
-| Static RAM, vehicle build | 29,736 B, 22.7 % of 128 KiB | `arm-none-eabi-size` |
-| Heap | 9,448 B free == minimum-ever; predicted 9,444 B from the map | HIL |
-| MSP peak | 176–248 B, against a 360 B static budget | painted MSP |
-| Stack margins | every task ≥ 256 B free after all error paths | HIL |
-| Compiler warnings at `-O2` | 0, both builds | build |
-
----
-
-## 16. What is not verified
-
-Run on hardware: everything in §14. Not reached by the bench:
-
-- **The SD card and the OLED** (not fitted). Every figure in §4 and §5 is computed. With no card, the logger's block writes fail and are counted.
-- **The VN-200, the Wayfinder DVL and the Bar30** (not fitted). Their tasks were exercised only on the absent-sensor path; the parsers have not seen real traffic.
-- **ESCs and thrusters.** Outputs were measured at the pin, not driving an ESC.
-- **The in-water behaviour**: PID gains, thruster calibration, the allocation matrix against real thrust.
-- **Remaining checklist items** in [`docs/HARDWARE_CHECKLIST.md`](docs/HARDWARE_CHECKLIST.md) that need the parts above (SD timing, OLED refresh, ESC arming).
-
----
-
-## 17. Building
-
-Import into STM32CubeIDE as an existing project. Any new folder under `Devices/` or `Drivers/` must have build inclusion checked: right-click → Resource Configurations → Exclude from Build → leave **unchecked**. For a headless build, the project name contains a `+`, which the builder reads as a regular expression: pass it as `"Nucleo_AUV_Bare_Metal\+RTOS/Debug"`.
-
-**Build options**
-
-| Define | Where | Default | Effect |
-|---|---|---|---|
-| `BENCH_HIL` | `Core/Inc/bench_config.h` | `1` | HIL instrumentation and console bench keys. **Build the vehicle with `-DBENCH_HIL=0`**: the bench keys can drive ESC outputs off neutral |
-| `ENABLE_IWDG` | `Drivers/iwdg/iwdg.h` | off | Independent watchdog, refreshed only by `control_task`. Off by default for debugging; a build without it says so in a boxed banner and a distinct LD2 pattern |
-
-The figures in this document come from an out-of-tree build at `-O2` (the CubeIDE Debug configuration is `-O0`):
-
-```
-arm-none-eabi-gcc -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb \
-  -std=gnu11 -O2 -g3 -DSTM32F446xx -DHSE_VALUE=8000000U \
-  -ffunction-sections -fdata-sections -Wall -Wdouble-promotion \
-  -fstack-usage --specs=nano.specs
-```
-
-`-DHSE_VALUE=8000000U` matters: nothing in the tree defined it, so `system_stm32f4xx.c` fell through to ST's 25 MHz default and `SystemCoreClockUpdate()` would have reported 562.5 MHz.
-
----
-
-## 18. Console
-
-115200 8N1 on the ST-Link VCP. Single-key commands:
-
-| Key | Output |
+| Bug | Effect |
 |---|---|
-| `s` | Per-task stack high-water marks, with the lower-bound caveat |
-| `h` | Clock status, heap free / min-ever-free, all drop counters, SD block counts, sensor states, link and failsafe state |
-| `?` | Help |
+| VN-200 field mask `0x0018` in the IMU group | means uncompensated gyro + temperature, not accel + gyro; no real packet could ever match |
+| VN-200 CRC read little-endian | every packet would fail |
+| Bar30 compensation used C's `/` | rounds negative values toward zero; the datasheet's worked example needs rounding down (19.82 °C instead of 19.81) — fixed with shifts |
+| Bar30 never checked its PROM CRC | a corrupted calibration word would scale every reading |
+| Analog sensor at 400 kPa/V (Pico sketch) | the part is 0–1 MPa over 4 V = 250 kPa/V |
 
-**The build configuration decides the watchdog and the bench hooks.** Release (the vehicle build) always has the `IWDG` and never has the `BENCH_HIL` hooks. Debug has the hooks and no watchdog, so breakpoints don't reset the board; add `-DENABLE_IWDG` to the Debug defines to test the watchdog. A build without it announces itself with a boxed boot banner *and* a distinct LD2 pattern (short blip, long dark), so a watchdog-less build can't be mistaken for a watchdog-ed one on the bench.
+**Found by reviewing the design:**
+
+| Bug | Effect |
+|---|---|
+| CPU fault handlers just looped | PWM kept running at the last command; a crash mid-manoeuvre left the thrusters on |
+| Disarm didn't reset the ramp or PID | re-arming jumped to full thrust (§10) |
+| Control took one command per tick | a Pi sending faster than 50 Hz left the vehicle up to 80 ms behind |
+| Telemetry busy-waited on the UART | 27–54% of the CPU |
+| Release configuration had only CubeMX's default include paths | it had never been able to build; the "vehicle build" didn't exist |
+| Default build had bench hooks on and the watchdog off | the easiest build to flash was the unsafe one |
+| Bar30 initialised once at boot | a sensor plugged in later was read with an all-zero calibration |
+
+Earlier fixes from the bare-metal → RTOS move (static review): the PLL register
+OR-ed onto its reset value (wrong clock), APB1 over its limit, `HSE_VALUE`
+undefined, six pins claimed by two drivers, `pwm_set_us()` ignoring its channel
+argument, unbounded I2C waits starving low-priority tasks when no sensor was
+connected, ring-buffer variables shared with an interrupt but not `volatile`.
+
+---
+
+## 14. Building and testing
+
+**STM32CubeIDE:** import as an existing project and build *Debug* (bench) or
+*Release* (vehicle). Any new folder under `Devices/` must be added to the
+project's source folders and include paths.
+
+**Host tests** (PC, needs `gcc`):
+
+```bash
+sh tests/host/run.sh
+```
+
+**Bench test** (Nucleo on USB; optional jumpers: PA9→PA10 for the Pi-link
+loopback, a PWM pin → PA15 for PWM capture; optional MPU-6050 on I2C1):
+
+```bash
+python tools/hil/hil_rtos.py --port COM12
+```
+
+It drives the console keys, measures timing with the DWT cycle counter, and
+writes a pass/fail report. [`docs/HARDWARE_CHECKLIST.md`](docs/HARDWARE_CHECKLIST.md)
+lists the checks that need a scope, an ESC or a sensor.
+
+**Console** (115200 on the ST-LINK COM port): `s` stack marks, `h` health
+(clock, heap, every drop counter, sensor states, packet counts, link and
+failsafe state), `?` help.
+
+---
+
+## 15. Not done yet
+
+- Bench-run everything marked `UNTESTED` (§1), then rerun `hil_rtos.py`.
+- VN-200 and DVL on real hardware; confirm the DVL checksum variant.
+- Check the BNO085's axis signs against the VN-200.
+- Replace the OLED with the ILI9341 TFT; make the SD log start after the last
+  run instead of overwriting it; add sensor readings to the log record.
+- Update the Pi parser for packets `0x03` and `0x04`, and raise the baud rate.
+- Tune the PID in the water.
+
+---
+
+## 16. Design decisions in one line each
+
+- **Failsafe in the control task**: the check must not depend on the thing that failed.
+- **Watchdog refreshed only by the control task**: if the loop that moves thrusters stops, the board resets.
+- **Thrusters to neutral before anything else in a fault handler**: reading a bad stack can fault again and lock the core up.
+- **Mailbox queues for sensors, FIFOs for commands and logs**: latest value vs every item.
+- **Zero timeouts on the control path**: losing a log record is fine; missing a control tick is not.
+- **DMA in both directions on the Pi link**: the CPU shouldn't wait on a UART.
+- **Half/full-transfer interrupts as well as IDLE**: a position counter can't tell "nothing" from "a full lap".
+- **Interrupts enabled from their own tasks**: no wake-up can happen before the scheduler exists.
+- **SPI bus owner, I2C mutex**: SPI needs per-device clock speeds; the I2C devices don't, and their transfers are short.
+- **Sensor health from valid packets, not bytes**: noise is not a sensor.
+- **Switch back to the preferred sensor only after 1 s**: no flapping on a loose wire.
+- **Measured zero accepted only if plausible**: a reboot underwater must not zero the depth.
+- **Allocate everything before the scheduler**: heap exhaustion at run time becomes impossible, and the bench checks it.
+- **Parsers and maths testable on a PC**: datasheet examples become unit tests.

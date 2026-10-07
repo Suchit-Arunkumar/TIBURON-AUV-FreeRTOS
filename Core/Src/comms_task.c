@@ -12,21 +12,11 @@
 TaskHandle_t commsTaskHandle = NULL;
 QueueHandle_t commandQueue = NULL;
 
-/*
- * Commands parsed successfully but not delivered to control_task.
- *
- * This was the one silent-loss path left in the Phase 11 queue analysis:
- * every other drop site had a counter, so a full commandQueue was the
- * only way to lose data with no diagnostic. Non-zero here means
- * control_task is not draining - it empties the queue every 20 ms tick,
- * so a depth-4 queue only fills if the control loop has stalled.
- *
- * Written by comms_task, read by dummy_task's health report.
- */
+// Valid commands that didn't fit in commandQueue. Control empties it every
+// tick, so non-zero means the control loop has stalled.
 static volatile uint32_t cmd_drop_count = 0;
 
-/* CRC-valid packets received since boot. Monotonic; the recovery streak
- * itself is owned entirely by control_task. */
+// CRC-valid command packets since boot.
 static volatile uint32_t cmd_valid_count = 0;
 
 uint32_t comms_cmd_drops(void)
@@ -40,19 +30,9 @@ uint32_t comms_cmd_valid(void)
 }
 
 /*
- * Outgoing frames.
- *
- * A small ring of whole frames that the TX DMA sends in order. Only
- * comms_task touches it: it builds a frame in the slot at head, and when
- * the DMA reports a frame done (COMMS_NOTIFY_TX_DONE) it frees the slot
- * at tail and starts the next one. The ISR never reads or writes the
- * ring, so the ring needs no lock.
- *
- * A frame takes 5.4 ms on the wire at 115200 baud. Per 20 ms tick
- * comms_task queues telemetry + sensors, plus a DVL frame when there is a
- * new one: at most 3 frames, 16 ms of line time, and about 60% of the
- * link on average. Four slots cover a tick's worth with one to spare. If
- * they ever fill, the new frame is dropped and counted.
+ * Outgoing frames, sent in order by the TX DMA. Only this task touches
+ * the ring (the interrupt just signals TX_DONE), so no lock. Per 20 ms
+ * tick there are at most 3 frames of 5.4 ms each, so 4 slots is enough.
  */
 #define TX_SLOTS  4U
 
@@ -62,7 +42,6 @@ static uint8_t tx_tail      = 0;
 static uint8_t tx_count     = 0;
 static bool    tx_in_flight = false;
 
-/* Written by comms_task, read by dummy_task's health report. */
 static volatile uint32_t tx_drop_count = 0;
 
 uint32_t comms_tx_drops(void)
@@ -113,11 +92,8 @@ static uint32_t now_ms(void)
     return (uint32_t)(xTaskGetTickCount() * portTICK_PERIOD_MS);
 }
 
-/*
- * SENSORS frame (type 0x03): the newest IMU and depth samples, sent with
- * every telemetry frame. Peek, not receive: the queues hold one sample
- * each and logging and the display read them too.
- */
+// SENSORS frame (0x03), sent with every telemetry frame. Peek, not
+// receive: other tasks read the same samples.
 static void queue_sensors_frame(void)
 {
     uint8_t *slot = tx_reserve();
@@ -171,11 +147,7 @@ static void queue_sensors_frame(void)
     tx_commit();
 }
 
-/*
- * DVL frame (type 0x04): only when dvl_task has published a new frame
- * since the last one sent. The Wayfinder pings at roughly 15-20 Hz near
- * the bottom, so this goes out less often than the 50 Hz frames.
- */
+// DVL frame (0x04), only when dvl_task has a frame we haven't sent yet.
 static void queue_dvl_frame_if_new(void)
 {
     static uint32_t last_sent_ms = 0U;
@@ -245,12 +217,7 @@ void comms_task(void *argument)
 {
     (void)argument;
 
-    /*
-     * Enable USART1's interrupt here, not in main. The scheduler is
-     * running and this handle is populated, so the ISR's
-     * xTaskNotifyFromISR / portYIELD_FROM_ISR pair is safe. See the note
-     * in uart_packet.c.
-     */
+    // here, not in main: the scheduler and this task's handle now exist
     uart1_irq_enable();
 
     for (;;)
@@ -274,25 +241,14 @@ void comms_task(void *argument)
         {
             CommandPayload cmd;
 
-            /*
-             * Drain every complete frame, not just the first. One IDLE
-             * event can deliver more than one frame (two CMDs back to
-             * back, or a CMD behind looped-back telemetry); with a single
-             * parse per notification the second one waited for the next
-             * burst to arrive, a full tick late or, if the Pi then went
-             * quiet, never.
-             */
+            // One interrupt can bring more than one frame, so parse
+            // until there are none left.
             while (packet_parse_cmd(&cmd))
             {
                 cmd_valid_count++;
                 bench_cmd_parsed(&cmd);
 
-                /*
-                 * Short bounded wait, then drop and count. The queue is
-                 * only full if control_task has stopped draining it, and
-                 * blocking longer would just back up the RX path behind
-                 * a stalled control loop.
-                 */
+                // only full if control has stalled: wait 1 ms, then drop
                 if (xQueueSend(
                         commandQueue,
                         &cmd,
@@ -321,15 +277,8 @@ void comms_task(void *argument)
             telemetry.link_ok   = ctl.link_ok;
             telemetry.sat_flags = ctl.sat_flags;
 
-            /*
-             * Same split as the Pico firmware:
-             *   depth_m     - the Pi's fused depth, what the PID acts on
-             *   raw_depth_m - the onboard depth sensor (Bar30, or the
-             *                 analog backup), telemetry only
-             *
-             * xQueuePeek, not Receive: depthQueue holds one sample, and
-             * other readers want it too. Stays 0 with no sensor.
-             */
+            // depth_m: the Pi's fused depth (what the PID uses).
+            // raw_depth_m: this board's own depth sensor, 0 if none.
             telemetry.depth_m = ctl.pose[2];
 
             DepthSample depth;
@@ -344,11 +293,7 @@ void comms_task(void *argument)
                 telemetry.pid_u[i] = ctl.u[i];
             }
 
-            /*
-             * TelemetryPayload is __packed__, so esc_pwm is not
-             * guaranteed to be 2-byte aligned. memcpy rather than
-             * element assignment through a uint16_t pointer.
-             */
+            // packed struct: esc_pwm may be unaligned, so memcpy
             memcpy(telemetry.esc_pwm, ctl.pwm_us, sizeof(telemetry.esc_pwm));
 
             packet_build_telemetry(&telemetry, slot);
@@ -360,9 +305,7 @@ void comms_task(void *argument)
 
         tx_kick();
 
-        /* BENCH_HIL: loopback injector writes after telemetry. Its blocking
-         * write waits for the DMA frame to finish first, so the two never
-         * interleave on the wire. Nothing otherwise. */
+        // bench build only: loopback test frames go out after telemetry
         if (notify_value & COMMS_NOTIFY_TELEMETRY)
         {
             bench_comms_after_tx();
