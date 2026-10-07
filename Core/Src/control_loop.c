@@ -645,7 +645,7 @@ void control_task(void *argument)
 	     * ESCs lose their signal — which is what we want — rather than
 	     * staying alive with the last PWM values latched.
 	     *
-	     * Compiles to nothing unless ENABLE_IWDG is defined in iwdg.h.
+	     * Compiles to nothing in Debug builds (see iwdg.h).
 	     */
 	    iwdg_kick();
 

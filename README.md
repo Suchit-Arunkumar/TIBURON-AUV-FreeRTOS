@@ -659,16 +659,4 @@ arm-none-eabi-gcc -mcpu=cortex-m4 -mfpu=fpv4-sp-d16 -mfloat-abi=hard -mthumb \
 | `h` | Clock status, heap free / min-ever-free, all drop counters, SD block counts, sensor states, link and failsafe state |
 | `?` | Help |
 
-The bench build adds, all printed as `B:` lines for `hil_rtos.py`:
-
-| Key | Does |
-|---|---|
-| `b` / `z` | Bench report (timing, CPU, MSP, link counters) / zero the statistics |
-| `a` `d` `1` `x` `e` `j` | Inject armed / disarmed / one / no / bad-CRC / junk-wrapped command frames on USART1 |
-| `w` / `v` | 256-byte DMA wrap test with / without half- and full-transfer draining |
-| `i` / `I` | MPU-6050 stress test with `i2c_read()` / `i2c_read_rm()` |
-| `p` / `P` | PWM capture report on PA15 / toggle the per-channel PWM signature |
-| `K` / `k` | Suspend / resume `comms_task` |
-| `F` / `W` | Trip a `configASSERT` / hang `control_task` |
-
-**`IWDG` is disabled by default.** A build without it announces itself with a boxed boot banner *and* a distinct LD2 pattern (short blip, long dark), because a watchdog-less build must never be mistakable for one with a watchdog on the bench.
+**The build configuration decides the watchdog and the bench hooks.** Release (the vehicle build) always has the `IWDG` and never has the `BENCH_HIL` hooks. Debug has the hooks and no watchdog, so breakpoints don't reset the board; add `-DENABLE_IWDG` to the Debug defines to test the watchdog. A build without it announces itself with a boxed boot banner *and* a distinct LD2 pattern (short blip, long dark), so a watchdog-less build can't be mistaken for a watchdog-ed one on the bench.

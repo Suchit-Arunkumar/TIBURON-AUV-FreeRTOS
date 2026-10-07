@@ -616,10 +616,9 @@ int main(void)
     /*
      * 14. Start the independent watchdog.
      *
-     * Compiles to nothing unless ENABLE_IWDG is defined in iwdg.h, which
-     * it is not by default. Started last among the peripherals so the
-     * slower init steps above cannot trip it, and refreshed only by
-     * control_task.
+     * On in Release builds, off in Debug (see iwdg.h). Started last
+     * among the peripherals so the slower init steps above cannot trip
+     * it, and refreshed only by control_task.
      */
     iwdg_init();
 
@@ -633,7 +632,7 @@ int main(void)
         printf("*  IWDG DISABLED - BENCH BUILD               *\r\n");
         printf("*  No watchdog. A hung control loop will NOT  *\r\n");
         printf("*  reset the board or stop the thrusters.     *\r\n");
-        printf("*  Uncomment ENABLE_IWDG in iwdg.h to arm.    *\r\n");
+        printf("*  Release builds always have it.            *\r\n");
         printf("**********************************************\r\n");
     }
 
@@ -837,7 +836,7 @@ int main(void)
     printf("*  BENCH_HIL BUILD - laptop test hooks in    *\r\n");
     printf("*  Console keys can drive ESC outputs off    *\r\n");
     printf("*  neutral. Never flash this to the vehicle. *\r\n");
-    printf("*  Build with -DBENCH_HIL=0 for the vehicle. *\r\n");
+    printf("*  Use the Release build for the vehicle.    *\r\n");
     printf("**********************************************\r\n");
 #endif
 
