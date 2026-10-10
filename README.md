@@ -159,13 +159,25 @@ debugger can pause it.
 - The TFT shows a status screen: armed or not, sensor readings, which sensors
   are working.
 
+## Key figures
+
+| | |
+|---|---|
+| Flash / static RAM (Release, -Os) | 43,088 B / 36,408 B |
+| Control loop | 50 Hz (TIM7), measured period 20,000.00 µs, worst jitter 1.58 µs |
+| Failsafe | trips 520 ms after the last command (500 ms timeout + one tick) |
+| Pi link | USART1 115200, DMA RX + IDLE, DMA TX, 50 Hz telemetry |
+| I2C1 | 100 kHz |
+| FreeRTOS | 8 tasks, heap 22,528 B, 7,608 B free at runtime |
+| Soak | 60 s, 3016/3016 commands round-tripped exactly, 0 CRC failures |
+
 ## Testing
 
 | What | How | Status |
 |---|---|---|
-| RTOS timing, Pi link, failsafe, watchdog, I2C, all 8 PWM outputs | `tools/hil/hil_rtos.py` drives the board from a laptop | All 19 tests passed on the bench, 5 Oct ([reports](tools/hil/reports)) |
+| RTOS timing, Pi link, failsafe, watchdog, I2C, all 8 PWM outputs | `tools/hil/hil_rtos.py` drives the board from a laptop | 10 Oct, two runs: 17 of 19 tests passed (PWM 8/8 and soak in run 1; watchdog, failsafe, DMA and the rest in run 2). I2C stress skipped: no working MPU-6050. Boot test missed its automatic report after a repeated RESET press; the manual health report passed. Run 2's soak flagged 40 ring-buffer drops from earlier in the run (during the DMA-wrap or I2C stress test; the counter is cumulative); the soak itself had 3016/3016 commands exact, 0 CRC failures. ([reports](tools/hil/reports)) |
 | Sensor parsers and maths | PC tests in `tests/host`, checked against the datasheets | All pass |
-| New sensor drivers, display, SD log changes | `docs/HARDWARE_CHECKLIST.md` | Not yet run on the board |
+| New sensor drivers, display, SD log changes, I2C bus mutex | `docs/HARDWARE_CHECKLIST.md` | Not yet run on the board |
 
 Measured on the bench: the control loop runs every 20 ms with about 1 µs of
 jitter, and each run takes about 0.1 ms. The failsafe tripped 520 ms after the
