@@ -238,6 +238,8 @@ void uart1_write_buf(uint8_t *buf, uint16_t len)
 
         USART1->DR = buf[i];
     }
+
+    while (!(USART1->SR & USART_SR_TC)) { }
 }
 
 void uart1_write_byte(uint8_t b)
