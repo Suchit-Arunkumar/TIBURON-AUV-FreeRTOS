@@ -11,13 +11,13 @@
 
 /*
  * Every wait is bounded (a slave can hold the bus forever), and timed with
- * the TIM2 microsecond counter. A healthy byte takes ~23 us at 400 kHz, so
+ * the TIM2 microsecond counter. A healthy byte takes ~90 us at 100 kHz, so
  * spin for a bit first; after that the bus is misbehaving and the task
  * sleeps 1 ms between polls instead of hogging the CPU. No sleeping before
  * the scheduler starts.
  */
-#define I2C_SPIN_US       250UL    /* fast path: ~10 byte times    */
-#define I2C_TIMEOUT_US   2500UL    /* total budget: ~100 byte times */
+#define I2C_SPIN_US       250UL    /* fast path: ~3 byte times     */
+#define I2C_TIMEOUT_US   2500UL    /* budget per wait: ~27 byte times */
 
 const char *i2c_status_str(I2C_Status s)
 {
@@ -137,12 +137,12 @@ void i2c1_init(void)
 
 	I2C1->CR2 = APB1CLK_MHZ;
 
-	// 400 kHz fast mode: SCL high = CCR, low = 2 x CCR cycles of 45 MHz,
-	// 45 MHz / (3 x 38) = 395 kHz
-	I2C1->CCR = I2C_CCR_FS | 38U;
+	// 100 kHz standard mode: SCL high = low = CCR cycles of 45 MHz,
+	// 45 MHz / (2 x 225) = 100 kHz. 400 kHz was unreliable on bench wiring.
+	I2C1->CCR = 225U;
 
-	// max rise time 300 ns x 45 MHz + 1
-	I2C1->TRISE = 14U;
+	// max rise time 1000 ns x 45 MHz + 1
+	I2C1->TRISE = 46U;
 
 	I2C1->CR1 |= I2C_CR1_PE;
 }
