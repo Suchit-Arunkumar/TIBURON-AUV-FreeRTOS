@@ -133,6 +133,9 @@ Same packet format as our Pico firmware, so the existing Pi code works:
 
 The exact byte layouts are in `Protocol/struct.h`.
 
+This repo and pico-protocol share the 62-byte frame format but have separate
+type tables, so type codes are not interchangeable.
+
 ## Safety
 
 | If... | then... |
