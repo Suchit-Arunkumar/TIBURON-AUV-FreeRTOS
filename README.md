@@ -166,7 +166,7 @@ debugger can pause it.
 
 | | |
 |---|---|
-| Flash / static RAM (Release, -Os) | 43,088 B / 36,408 B |
+| Flash / static RAM (Release, -Os) | 43,480 B / 36,408 B |
 | Control loop | 50 Hz (TIM7), measured period 20,000.00 µs, worst jitter 1.58 µs |
 | Failsafe | trips 520 ms after the last command (500 ms timeout + one tick) |
 | Pi link | USART1 115200, DMA RX + IDLE, DMA TX, 50 Hz telemetry |
