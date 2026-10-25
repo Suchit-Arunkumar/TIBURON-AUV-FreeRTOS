@@ -176,7 +176,7 @@ debugger can pause it.
 | Pi link | USART1 115200, DMA RX + IDLE, DMA TX, 50 Hz telemetry | [`2026-10-10_run2.md`](tools/hil/reports/2026-10-10_run2.md) (DMA + IDLE RX, 50.30 Hz); 115200 and DMA TX not in a committed report |
 | I2C1 | 100 kHz (400 kHz was unreliable on the bench wiring, commit be65e76) | [`2026-10-05_b429abe.md`](tools/hil/reports/2026-10-05_b429abe.md) (100 kHz, CCR = 225); 400 kHz claim not in a committed report |
 | FreeRTOS | 8 tasks, heap 22,528 B, 7,608 B free at runtime | [`2026-10-10_run2.md`](tools/hil/reports/2026-10-10_run2.md) (heap, stack audit) |
-| Soak | 60 s, 3016/3016 commands round-tripped exactly, 0 CRC failures | [`2026-10-10_run2.md`](tools/hil/reports/2026-10-10_run2.md); that soak is marked FAIL (40 ring drops) |
+| Soak | 60 s, 3017/3017 commands round-tripped exactly, 0 CRC failures, 0 ring drops | [`2026-10-10_run1.md`](tools/hil/reports/2026-10-10_run1.md) (PASS); the soak in `2026-10-10_run2.md` is marked FAIL (40 ring drops) |
 
 ## Testing
 

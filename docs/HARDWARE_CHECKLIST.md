@@ -14,15 +14,15 @@ not just pass/fail.
 python tools/hil/hil_rtos.py --port COM12
 ```
 
-The 5 Oct runs ([reports](../tools/hil/reports)) passed all 19 tests. Rerun it on the current firmware (Debug build), with the PA9→PA10
+Not every 5 Oct run passed all 19 tests: PWM was skipped in `2026-10-05_02ee61a.md` and failed in `2026-10-05_d53de2b.md`. The latest committed run is `2026-10-10_run1.md` ([reports](../tools/hil/reports)). Rerun it on the current firmware (Debug build), with the PA9→PA10
 jumper fitted. Things to look at in the new report:
 
 - **Comms CPU load.** It was 27% idle and 54% with two frames per tick, from
   the busy-wait transmit. With DMA transmit it should be close to 0%.
 - **Loopback and soak.** Telemetry frames still arrive with 0 CRC failures.
   This confirms the DMA transmit path.
-- **I2C test.** Run with an MPU-6050 on I2C1. This is now at 400 kHz and
-  through the mutex.
+- **I2C test.** Run with an MPU-6050 on I2C1. I2C1 runs at 100 kHz (400 kHz was
+  unreliable on the bench wiring) and goes through the mutex.
 - **Stack marks** for the new tasks (IMU, Depth, SPIOwner). Each should have
   at least 25% free.
 - **Heap.** Free must still equal the minimum ever free.
