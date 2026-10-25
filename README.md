@@ -1,5 +1,9 @@
 # TIBURON AUV — STM32 firmware (FreeRTOS)
 
+- **What:** register-level FreeRTOS firmware for an STM32F446RE that reads the AUV's sensors, talks to the Raspberry Pi and drives 8 thrusters.
+- **Status:** bench-tested on a Nucleo board only; not yet run on the vehicle.
+- **Not yet exercised on the board:** BNO085, Bar30, analog pressure sensor, Wayfinder DVL and VN-200 drivers, SD card logging, ILI9341 display, I2C bus mutex (see `docs/HARDWARE_CHECKLIST.md`).
+
 Low-level controller for our team's underwater vehicle, running on an
 STM32F446RE (Nucleo board). Drivers are written directly on the registers
 (no HAL), with FreeRTOS for scheduling.
@@ -164,21 +168,21 @@ debugger can pause it.
 
 ## Key figures
 
-| | |
-|---|---|
-| Flash / static RAM (Release, -Os) | 43,480 B / 36,408 B |
-| Control loop | 50 Hz (TIM7), measured period 20,000.00 µs, worst jitter 1.58 µs |
-| Failsafe | trips 520 ms after the last command (500 ms timeout + one tick) |
-| Pi link | USART1 115200, DMA RX + IDLE, DMA TX, 50 Hz telemetry |
-| I2C1 | 100 kHz (400 kHz was unreliable on the bench wiring, commit be65e76) |
-| FreeRTOS | 8 tasks, heap 22,528 B, 7,608 B free at runtime |
-| Soak | 60 s, 3016/3016 commands round-tripped exactly, 0 CRC failures |
+| | | Source |
+|---|---|---|
+| Flash / static RAM (Release, -Os) | 43,480 B / 36,408 B | not in a committed report |
+| Control loop | 50 Hz (TIM7), measured period 20,000.00 µs, worst jitter 1.58 µs | [`2026-10-10_run1.md`](tools/hil/reports/2026-10-10_run1.md) (soak) |
+| Failsafe | trips 520 ms after the last command (500 ms timeout + one tick) | [`2026-10-10_run1.md`](tools/hil/reports/2026-10-10_run1.md), [`2026-10-10_run2.md`](tools/hil/reports/2026-10-10_run2.md) |
+| Pi link | USART1 115200, DMA RX + IDLE, DMA TX, 50 Hz telemetry | [`2026-10-10_run2.md`](tools/hil/reports/2026-10-10_run2.md) (DMA + IDLE RX, 50.30 Hz); 115200 and DMA TX not in a committed report |
+| I2C1 | 100 kHz (400 kHz was unreliable on the bench wiring, commit be65e76) | [`2026-10-05_b429abe.md`](tools/hil/reports/2026-10-05_b429abe.md) (100 kHz, CCR = 225); 400 kHz claim not in a committed report |
+| FreeRTOS | 8 tasks, heap 22,528 B, 7,608 B free at runtime | [`2026-10-10_run2.md`](tools/hil/reports/2026-10-10_run2.md) (heap, stack audit) |
+| Soak | 60 s, 3016/3016 commands round-tripped exactly, 0 CRC failures | [`2026-10-10_run2.md`](tools/hil/reports/2026-10-10_run2.md); that soak is marked FAIL (40 ring drops) |
 
 ## Testing
 
 | What | How | Status |
 |---|---|---|
-| RTOS timing, Pi link, failsafe, watchdog, I2C, all 8 PWM outputs | `tools/hil/hil_rtos.py` drives the board from a laptop | 17 of 19 tests passed on a rerun at commit 9a28d1a; no report from that rerun is committed. The committed reports (`2026-10-10_run1.md` and `run2.md`) are from an earlier build, `0babc49-dirty`. I2C stress test skipped: no working MPU-6050 was fitted. ([reports](tools/hil/reports)) |
+| RTOS timing, Pi link, failsafe, watchdog, I2C, all 8 PWM outputs | `tools/hil/hil_rtos.py` drives the board from a laptop | Latest committed report, [`2026-10-10_run2.md`](tools/hil/reports/2026-10-10_run2.md), build `0babc49-dirty`: 15 of 19 passed (clock tree, scheduling, heap, USART1 loopback, telemetry, command round trip, resync, corrupted frames, command-timeout failsafe, failsafe with comms_task suspended, 3-packet recovery, DMA exact-wrap, stack marks, fault latch, watchdog). 2 skipped: I2C vs MPU-6050 (no MPU-6050 answering at 0x68) and the 8 PWM outputs (run with `--no-pwm`). 2 failed: boot and console (automatic stack + health report not printed after boot) and the 60 s soak (40 ring-buffer drops). ([reports](tools/hil/reports)) |
 | Sensor parsers and maths | PC tests in `tests/host`, checked against the datasheets | All pass |
 | New sensor drivers, display, SD log changes, I2C bus mutex | `docs/HARDWARE_CHECKLIST.md` | Not yet run on the board |
 
